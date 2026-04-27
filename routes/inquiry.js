@@ -39,6 +39,7 @@ router.post("/insert", (req, res) => {
 
         db.query(assignSQL, [assignList], (err2) => {
             if (err2) return res.status(500).json({ success: false, err: err2 });
+            
 
             res.json({
                 success: true,
@@ -84,13 +85,14 @@ router.delete('/:id', async (req, res) => {
             );
         }
 
+
         // ✅ Step 4: Delete lead
         await connection.execute(
             'DELETE FROM `lead` WHERE lead_id = ?',
             [leadId]
         );
-
         await connection.commit();
+
 
         res.json({
             status: true,
@@ -111,5 +113,7 @@ router.delete('/:id', async (req, res) => {
     } finally {
         if (connection) connection.release();
     }
+
 });
+
 module.exports = router

@@ -46,6 +46,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   );
 });
 
+
 // Toggle finished state (only if it belongs to the logged-in user)
 router.put("/finish/:id", authenticateAndAuthorize(), (req, res) => {
   const { id } = req.params;
@@ -75,6 +76,5 @@ router.delete("/delete/:id", authenticateAndAuthorize(), (req, res) => {
     }
   );
 });
-
 
 module.exports = router;

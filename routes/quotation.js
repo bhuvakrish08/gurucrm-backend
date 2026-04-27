@@ -37,6 +37,8 @@ router.post("/insert", (req, res) => {
   });
 });
 
+
+
 // Update data
 router.put("/update/:id", (req, res) => {
   const { id } = req.params;
@@ -125,7 +127,6 @@ router.get("/quote", (req, res) => {
     });
   });
 });
-
 
 
 module.exports = router;

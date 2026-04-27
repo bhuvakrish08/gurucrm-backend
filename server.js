@@ -32,15 +32,11 @@ const ContractsRoutes = require("./routes/contracts-list")
 const lead = require("./routes/lead");
 const lead_follow_up = require('./routes/leadFollowUp')
 const quotationMainRoutes = require('./routes/quotationMain')
+const pi = require('./routes/perfomainvoices')
 
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("Server running...");
-});
-
 
 app.use("/api", loginRoutes);
 app.use("/api/todos", todoRoutes);
@@ -73,7 +69,7 @@ app.use("/api/contracts-list", ContractsRoutes);
 app.use("/api/lead", lead);
 app.use("/api/lead-follow-up",lead_follow_up)
 app.use("/api/quotation", quotationMainRoutes)
-
+app.use("/api/pi",pi);
 
 
 app.listen(process.env.PORT, () => {

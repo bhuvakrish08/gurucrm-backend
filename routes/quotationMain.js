@@ -54,6 +54,7 @@ router.get("/read", async (req, res) => {
         q.quotation_status,
         q.grand_total,
         q.amount,
+        q.proforma_percentage,
         q.assignee,
         q.follow_up_date,
         q.created_at as quotation_created_at,
@@ -288,6 +289,7 @@ router.get("/filter", async (req, res) => {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
   }
+
 });
 
 // =============================
@@ -339,6 +341,7 @@ router.put("/update/:id", async (req, res) => {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
   }
+  
 });
 
 // =============================

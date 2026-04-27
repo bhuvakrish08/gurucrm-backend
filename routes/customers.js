@@ -883,4 +883,3 @@ router.delete("/customer-contacts/:id", authenticateToken(), (req, res) => {
 
 
 module.exports = router;
-
