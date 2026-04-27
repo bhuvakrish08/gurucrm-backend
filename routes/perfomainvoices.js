@@ -283,6 +283,18 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
       [totals[0].total_percentage, totals[0].total_amount, pi_id]
     );
 
+    // ✅ FIX: UPDATE QUOTATION ALSO
+    await db.promise().query(
+      `UPDATE quotation 
+      SET proforma_percentage = ?
+      WHERE id = (
+        SELECT quotation_id 
+        FROM proforma_invoices 
+        WHERE pi_id = ?
+      )`,
+      [totals[0].total_percentage, pi_id],
+    );
+
     res.json({
       success: true,
       message: "Follow-up updated",
