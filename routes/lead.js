@@ -530,8 +530,8 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   let values = [];
 
   if (company_name) {
-    sql += " AND l.company_name = ?";
-    values.push(company_name);
+    sql += " AND l.company_name LIKE ?";
+    values.push(`%${company_name}%`);
   }
 
   if (customer_name) {
