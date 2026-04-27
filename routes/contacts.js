@@ -24,7 +24,7 @@ router.get("/read", async (req, res) => {
 
         c.id,
         c.customer_id,
-        c.company_name,
+        o.organization_name AS company_name,
         c.customer_name,
         c.contact_person,
         c.contact_number,
@@ -32,6 +32,9 @@ router.get("/read", async (req, res) => {
         c.contact_designation,
         d.name AS designation_name
       FROM contacts c
+
+      LEFT JOIN organizations o 
+        ON c.company_name = o.id
 
       LEFT JOIN contact_designation d
         ON c.contact_designation = d.id
@@ -44,7 +47,7 @@ router.get("/read", async (req, res) => {
 
     // company name filter
     if (search1) {
-      query += " AND c.company_name LIKE ?";
+      query += " AND o.organization_name LIKE ?";
       params.push(`%${search1}%`);
     }
 
@@ -83,17 +86,22 @@ router.get("/read", async (req, res) => {
     const [rows] = await db.promise().query(query, params);
 
     res.json({
+
       success: true,
       data: rows
+
     });
 
   } catch (err) {
+
     console.error("Error in /read:", err);
 
     res.status(500).json({
+
       success: false,
       message: "Internal Server Error",
       error: err.message,
+
     });
 
   }

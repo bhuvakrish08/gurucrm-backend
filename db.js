@@ -1,34 +1,36 @@
 const mysql = require("mysql2");
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST,   // example: localhost OR mysql.hostinger.com
+const db = mysql.createConnection({
+  host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
-
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-
-  connectTimeout: 10000
+  port: process.env.DB_PORT,
 });
 
-// check connection
-pool.getConnection((err, connection) => {
+// Connect first time
+function handleDisconnect() {
+  db.connect((err) => {
+    if (err) {
+      console.error("Database connection failed:", err);
+      setTimeout(handleDisconnect, 5000); // retry after 5 sec
+    } else {
+      console.log("✅ Connected to MySQL database");
+    }
+  });
+}
 
-  if (err) {
+handleDisconnect();
 
-    console.error("❌ MySQL connection failed:", err);
+// 🔄 Keep database alive every 5 minutes
+setInterval(() => {
+  db.query("SELECT 1", (err) => {
+    if (err) {
+      console.error("Keep alive query failed:", err);
+    } else {
+      console.log("⏱️ Database keep-alive ping sent");
+    }
+  });
+}, 5 * 60 * 1000); // 5 minutes
 
-  } else {
-
-    console.log("✅ MySQL Pool Connected");
-
-    connection.release();
-
-  }
-
-});
-
-module.exports = pool;
+module.exports = db;

@@ -5,232 +5,121 @@ const authenticateToken = require("../middlewares/authMiddleware");
 const router = express.Router();
 
 router.post("/add", authenticateToken(), (req, res) => {
-
   const user_id = req.user.id;
   const data = req.body;
 
-  // get connection from pool
-  db.getConnection((err, connection) => {
-
+  db.beginTransaction((err) => {
     if (err) {
-
-      console.error("Connection error:", err);
-
-      return res.status(500).json({
-        success:false,
-        message:"DB connection failed"
-      });
-
+      console.error("Transaction error:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
 
+    const customerSql = `
+      INSERT INTO customer_data (user_id, company_name, customer_type, customer_name, email, mobile, industry, website, remarks)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-    connection.beginTransaction((err) => {
+    const customerValues = [
+      user_id,
+      data.company_name,
+      data.customer_type,
+      data.customer_name,
+      data.email,
+      data.mobile,
+      data.industry,
+      data.website,
+      data.remarks
+    ];
 
+    db.query(customerSql, customerValues, (err, result) => {
       if (err) {
+        console.error("Customer insert error:", err);
 
-        connection.release();
+        // UNIQUE customer_name validation
+        if (err.code === "ER_DUP_ENTRY") {
+          return db.rollback(() =>
+            res.status(409).json({
+              message: "Customer name already exists"
+            })
+          );
+        }
 
-        return res.status(500).json({
-          success:false,
-          message:"Transaction error"
-        });
-
+        return db.rollback(() =>
+          res.status(500).json({ error: err.message })
+        );
       }
 
 
-      // 1. insert customer
-      const customerSql = `
+      const customer_id = result.insertId;
 
-        INSERT INTO customer_data
-
-        (
-          user_id,
-          company_name,
-          customer_type,
-          customer_name,
-          email,
-          mobile,
-          industry,
-          website,
-          remarks
-        )
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-
+      const addressSql = `
+        INSERT INTO customer_address
+        (customer_id, address_type, address)
+        VALUES (?, ?, ?)
       `;
 
-
-      connection.query(
-
-        customerSql,
-
-        [
-
-          user_id,
-          data.company_name,
-          data.customer_type,
-          data.customer_name,
-          data.email,
-          data.mobile,
-          data.industry,
-          data.website,
-          data.remarks
-
-        ],
-
-        (err, result) => {
-
-          if (err) {
-
-            return connection.rollback(() => {
-
-              connection.release();
-
-              res.status(500).json({
-                error: err.message
-              });
-
-            });
-
-          }
-
-
-          const customer_id =
-            result.insertId;
-
-
-          // 2. insert address
-
-          const addressSql = `
-
-            INSERT INTO customer_address
-
-            (customer_id, address_type, address)
-
-            VALUES (?, ?, ?)
-
-          `;
-
-
-          connection.query(
-
-            addressSql,
-
-            [
-
-              customer_id,
-              data.address_type,
-              data.address
-
-            ],
-
-            (err) => {
-
-              if (err) {
-
-                return connection.rollback(() => {
-
-                  connection.release();
-
-                  res.status(500).json({
-                    error: err.message
-                  });
-
-                });
-
-              }
-
-
-              // 3. insert GST
-
-              const gstSql = `
-
-                INSERT INTO customer_gst
-
-                (customer_id, gst_type, gst_number, state)
-
-                VALUES (?, ?, ?, ?)
-
-              `;
-
-
-              connection.query(
-
-                gstSql,
-
-                [
-
-                  customer_id,
-                  data.gst_type,
-                  data.gst_number,
-                  data.gst_state
-
-                ],
-
-                (err) => {
-
-                  if (err) {
-
-                    return connection.rollback(() => {
-
-                      connection.release();
-
-                      res.status(500).json({
-                        error: err.message
-                      });
-
-                    });
-
-                  }
-
-
-                  // commit transaction
-
-                  connection.commit((err) => {
-
-                    if (err) {
-
-                      return connection.rollback(() => {
-
-                        connection.release();
-
-                        res.status(500).json({
-                          error: err.message
-                        });
-
-                      });
-
-                    }
-
-
-                    connection.release();
-
-                    res.json({
-
-                      success:true,
-                      message:"Customer added successfully",
-                      customer_id
-
-                    });
-
-                  });
-
-                }
-
-              );
-
-            }
-
-          );
-
+      db.query(addressSql, [
+        customer_id,
+        data.address_type,
+        data.address
+      ], (err) => {
+        if (err) {
+          console.error("Address insert error:", err);
+          return db.rollback(() => res.status(500).json({ error: err.message }));
         }
 
-      );
+        const gstSql = `
+          INSERT INTO customer_gst
+          (customer_id, gst_type, gst_number, state)
+          VALUES (?, ?, ?, ?)
+        `;
 
+        db.query(gstSql, [
+          customer_id,
+          data.gst_type,
+          data.gst_number,
+          data.gst_state
+        ], (err) => {
+          if (err) {
+            console.error("GST insert error:", err);
+            return db.rollback(() => res.status(500).json({ error: err.message }));
+          }
+
+          const contactSql = `
+            INSERT INTO contacts
+            (customer_id, company_name, customer_name, contact_person, contact_number, email, contact_designation)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+          db.query(contactSql, [
+            customer_id,
+            data.company_name,
+            data.customer_name,
+            data.contact_person,
+            data.contact_number,
+            data.contact_email,
+            data.contact_designation
+          ], (err) => {
+            if (err) {
+              console.error("Contact insert error:", err);
+              return db.rollback(() => res.status(500).json({ error: err.message }));
+            }
+
+            db.commit((err) => {
+              if (err) {
+                console.error("Commit error:", err);
+                return db.rollback(() => res.status(500).json({ error: err.message }));
+              }
+
+              res.status(201).json({
+                success: true,
+                message: "Customer created successfully",
+                customer_id
+              });
+            });
+          });
+        });
+      });
     });
-
   });
-
 });
 
 
@@ -242,7 +131,6 @@ router.get("/get-customers", (req, res) => {
   const {
     search = "",
     customer_name = "",
-    company_name = "",
     mobile = "",
     email = "",
     industry = "",
@@ -252,25 +140,21 @@ router.get("/get-customers", (req, res) => {
 
   const allowedSort = {
     id: "c.id",
-    company_name: "c.company_name",
-    customer_name: "c.customer_name",
+    customer_name: "o.organization_name",
     email: "c.email",
     mobile: "c.mobile",
+    company_name: "o.organization_name",
     industry: "industry_name"
   };
 
-  const sortColumn =
-    allowedSort[sortBy] || "c.id";
-
-  const sortOrder =
-    order.toUpperCase() === "DESC"
-      ? "DESC"
-      : "ASC";
+  const sortColumn = allowedSort[sortBy] || "c.id";
+  const sortOrder = order.toUpperCase() === "DESC" ? "DESC" : "ASC";
 
   let sql = `
+
     SELECT 
       c.id,
-      c.company_name,
+      o.organization_name AS company_name,
       c.customer_name,
       c.email,
       c.mobile,
@@ -281,32 +165,46 @@ router.get("/get-customers", (req, res) => {
         SELECT name
         FROM industries
         WHERE id = c.industry
-      ) AS industry_name
+      ) AS industry_name,
+
+      o.organization_name
+
     FROM customer_data c
+
+    LEFT JOIN organizations o 
+      ON o.id = c.company_name
+
     WHERE 1=1
+
   `;
 
   const values = [];
 
-  // GLOBAL SEARCH
+  // global search
   if (search.trim()) {
+
     sql += `
+
       AND (
-        c.company_name LIKE ?
-        OR c.customer_name LIKE ?
+
+        c.customer_name LIKE ?
         OR c.email LIKE ?
         OR c.mobile LIKE ?
         OR c.customer_type LIKE ?
         OR c.website LIKE ?
+
         OR (
           SELECT name
           FROM industries
           WHERE id = c.industry
         ) LIKE ?
+
+        OR o.organization_name LIKE ?
       )
     `;
 
     values.push(
+
       `%${search}%`,
       `%${search}%`,
       `%${search}%`,
@@ -314,15 +212,12 @@ router.get("/get-customers", (req, res) => {
       `%${search}%`,
       `%${search}%`,
       `%${search}%`
+
     );
+
   }
 
-  // FILTERS
-  if (company_name.trim()) {
-    sql += " AND c.company_name LIKE ?";
-    values.push(`%${company_name}%`);
-  }
-
+  // filters
   if (customer_name.trim()) {
     sql += " AND c.customer_name LIKE ?";
     values.push(`%${customer_name}%`);
@@ -346,18 +241,26 @@ router.get("/get-customers", (req, res) => {
   sql += ` ORDER BY ${sortColumn} ${sortOrder}`;
 
   db.query(sql, values, (err, rows) => {
+
     if (err) {
+
       console.error("DB Error:", err);
+
       return res.status(500).json({
-        success:false,
-        message:"Database error"
+
+        success: false,
+        message: "Database error"
+
       });
+
     }
 
     res.json({
-      success:true,
+
+      success: true,
       totalRecords: rows.length,
       data: rows
+
     });
   });
 });
@@ -427,37 +330,24 @@ router.get("/get-column-scroll", async (req, res) => {
 });
 
 //  Simple API: Fetch all company names
-// Get UNIQUE company names (string)
 router.get("/company-names", (req, res) => {
-
-  const sql = `
-    SELECT DISTINCT company_name
-    FROM customer_data
-    WHERE company_name IS NOT NULL
-      AND company_name != ''
-    ORDER BY company_name ASC
-  `;
+  const sql = "SELECT company_name FROM customers ORDER BY company_name ASC";
 
   db.query(sql, (err, rows) => {
-
     if (err) {
-
-      console.error(err);
-
+      console.error("Error fetching company names:", err);
       return res.status(500).json({
         success: false,
-        message: "Database error"
+        message: "Database error",
+        error: err.message,
       });
-
     }
 
     res.json({
       success: true,
-      data: rows
+      data: rows,
     });
-
   });
-
 });
 
 
@@ -484,46 +374,33 @@ router.get("/customer-names", (req, res) => {
 
 
 router.get("/customer-name", (req, res) => {
-   const { company_name } = req.query;
+  const { company_name } = req.query;
 
-  let sql = `
-    SELECT id, customer_name
-    FROM customer_data
-    WHERE 1=1
-  `;
-
+  let sql = "SELECT id,customer_name FROM customer_data";
   const values = [];
 
   if (company_name) {
-
-    sql += " AND company_name = ?";
-
+    sql += " WHERE company_name = ?";
     values.push(company_name);
-
   }
 
   sql += " ORDER BY customer_name ASC";
 
   db.query(sql, values, (err, rows) => {
-
     if (err) {
-
-      console.error(err);
-
+      console.error("Error fetching customer names:", err);
       return res.status(500).json({
-        success:false,
-        message:"Database error"
+        success: false,
+        message: "Database error",
+        error: err.message,
       });
-
     }
 
     res.json({
-      success:true,
-      data:rows
+      success: true,
+      data: rows,
     });
-
   });
-
 });
 
 
@@ -811,7 +688,7 @@ router.get("/customer-contacts/:customer_id", authenticateToken(), (req, res) =>
     SELECT 
       ct.id,
       c.customer_name,      
-      c.company_name,
+      o.organization_name AS company_name,
       ct.contact_person,
       ct.contact_number,
       ct.email,
@@ -821,6 +698,9 @@ router.get("/customer-contacts/:customer_id", authenticateToken(), (req, res) =>
 
     JOIN customer_data c 
       ON c.id = ct.customer_id
+
+    JOIN organizations o 
+      ON o.id = c.company_name
 
     LEFT JOIN contact_designation d
       ON d.id = ct.contact_designation
@@ -833,11 +713,11 @@ router.get("/customer-contacts/:customer_id", authenticateToken(), (req, res) =>
   db.query(sql, [customer_id, req.user.id], (err, rows) => {
     if (err) {
       return res.status(500).json({
-        success: false,
-        message: "Database error"
+        success:false,
+        message:"Database error"
       });
     }
-    res.json({ success: true, data: rows });
+    res.json({ success:true, data: rows });
 
   });
 

@@ -24,6 +24,7 @@ router.get("/read", (req, res) => {
     if (err) return res.status(500).json(err);
     res.json(result);
   });
+  
 });
 
 // Insert data
