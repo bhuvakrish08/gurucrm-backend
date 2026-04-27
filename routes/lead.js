@@ -139,6 +139,60 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
 
 });
 
+
+
+router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, res) => {
+  const id = req.params.id;
+
+  const sql = `
+    SELECT
+      l.lead_id,
+      l.company_name,
+      l.customer_name,
+      l.lead_title,
+
+      pc.name AS product_category,
+      p.product_name,
+      ls.name AS source,
+      l.priority,
+      l.assignee,
+      lc.name AS category,
+      l.description,
+      l.status,
+      l.created_at
+
+    FROM lead l
+
+    LEFT JOIN product_category pc
+      ON pc.id = l.product_category
+
+    LEFT JOIN product_master p
+      ON p.id = l.product_name
+
+    LEFT JOIN inquiry_lead_source ls
+      ON ls.id = l.source
+
+    LEFT JOIN inquiry_lead_category lc
+      ON lc.id = l.category
+
+    WHERE l.lead_id = ?
+  `;
+
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      return res.status(500).json({
+        success: false,
+        error: err,
+      });
+    }
+
+    res.json({
+      success: true,
+      lead: result[0],
+    });
+  });
+});
+
 /* =====================================
    VIEW SINGLE LEAD
 ===================================== */
