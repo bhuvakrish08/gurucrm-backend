@@ -1,10 +1,10 @@
 const express = require("express");
 const db = require("../db");
-const authenticateToken = require("../middlewares/authMiddleware");
+const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 
 const router = express.Router();
 
-router.post("/add", authenticateToken, (req, res) => {
+router.post("/add", authenticateAndAuthorize(), (req, res) => {
     const {
         organization_name,
         industry,
