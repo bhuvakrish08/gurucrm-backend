@@ -881,5 +881,78 @@ router.delete("/customer-contacts/:id", authenticateToken(), (req, res) => {
 });
 
 
+// DELETE CUSTOMER (MAIN API)
+router.delete("/:id", authenticateToken(), (req, res) => {
+  console.log("DELETE API HIT:", req.params.id);
+
+  const { id } = req.params;
+
+  db.getConnection((err, connection) => {
+    if (err) {
+      return res
+        .status(500)
+        .json({ success: false, message: "DB connection error" });
+    }
+
+    connection.beginTransaction((err) => {
+      if (err) {
+        connection.release();
+        return res
+          .status(500)
+          .json({ success: false, message: "Transaction error" });
+      }
+
+      connection.query(
+        "DELETE FROM contacts WHERE customer_id = ?",
+        [id],
+        (err) => {
+          if (err) return rollback(err);
+
+          connection.query(
+            "DELETE FROM customer_address WHERE customer_id = ?",
+            [id],
+            (err) => {
+              if (err) return rollback(err);
+
+              connection.query(
+                "DELETE FROM customer_gst WHERE customer_id = ?",
+                [id],
+                (err) => {
+                  if (err) return rollback(err);
+
+                  connection.query(
+                    "DELETE FROM customer_data WHERE id = ?",
+                    [id],
+                    (err) => {
+                      if (err) return rollback(err);
+
+                      connection.commit((err) => {
+                        if (err) return rollback(err);
+
+                        connection.release();
+                        res.json({
+                          success: true,
+                          message: "Customer deleted successfully",
+                        });
+                      });
+                    },
+                  );
+                },
+              );
+            },
+          );
+        },
+      );
+
+      function rollback(error) {
+        connection.rollback(() => {
+          connection.release();
+          res.status(500).json({ success: false, message: error.message });
+        });
+      }
+    });
+  });
+});
+
 
 module.exports = router;
