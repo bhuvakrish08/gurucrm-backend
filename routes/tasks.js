@@ -373,5 +373,42 @@ router.get("/get-column-scroll", async (req, res) => {
     }
 });
 
+// ADD THIS ONE ROUTE — paste after the existing DELETE /delete/:id route
+router.delete("/delete-task/:id", async (req, res) => {
+  try {
+    const taskId = req.params.id;
+
+    // Delete associated files from Cloudinary first
+    const [files] = await db.promise().query(
+      "SELECT public_id FROM task_files WHERE task_id = ?",
+      [taskId]
+    );
+
+    for (const file of files) {
+      if (file.public_id) {
+        await cloudinary.uploader.destroy(file.public_id);
+      }
+    }
+
+    // Delete files from DB
+    await db.promise().query(
+      "DELETE FROM task_files WHERE task_id = ?", 
+      [taskId]
+    );
+
+    // Delete the task
+    await db.promise().query(
+      "DELETE FROM tasks WHERE id = ?", 
+      [taskId]
+    );
+
+    res.json({ success: true, message: "Task deleted successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 
 module.exports = router;
