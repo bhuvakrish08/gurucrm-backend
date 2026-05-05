@@ -101,6 +101,10 @@ router.post("/insert", authenticateAndAuthorize(), upload.array("files", 5), asy
       );
     }
 
+    // LOG ACTIVITY
+    const activityMsg = `${created_by_name} created a new task: ${task_name}`;
+    await db.promise().query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [activityMsg, created_by_name]);
+
     res.json({ success: true, message: "Task created ✅" });
 
   } catch (err) {

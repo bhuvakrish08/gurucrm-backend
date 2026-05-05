@@ -205,6 +205,11 @@ router.post("/add", authenticateToken(), (req, res) => {
 
                     connection.release();
 
+                    // LOG ACTIVITY
+                    const userName = req.user?.username || "Someone";
+                    const activityMsg = `${userName} added a new customer: ${data.customer_name} (${data.company_name})`;
+                    db.query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [activityMsg, userName]);
+
                     res.json({
 
                       success:true,
