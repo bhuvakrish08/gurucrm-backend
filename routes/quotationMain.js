@@ -182,6 +182,11 @@ router.post(
         );
       }
 
+      // LOG ACTIVITY
+      const userName = req.user?.username || "Someone";
+      const activityMsg = `${userName} created a new quotation: ${quotation_no} for ${company_name}`;
+      await db.promise().query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [activityMsg, userName]);
+
       res.json({
         success: true,
         message: "Quotation created successfully",

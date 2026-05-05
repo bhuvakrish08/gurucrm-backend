@@ -332,8 +332,9 @@ router.put('/update/:id', (req, res) => {
 
 
 // Add lead
-router.post("/insert", (req, res) => {
+router.post("/insert", authenticateAndAuthorize(), (req, res) => {
   console.log("Incoming lead data:", req.body);
+  const userName = req.user?.username || "Unknown User";
 
   const {
     company_name,
@@ -390,6 +391,10 @@ router.post("/insert", (req, res) => {
         error: err.message,
       });
     }
+
+    // LOG ACTIVITY
+    const activityMsg = `${userName} added a new lead: ${lead_title} for ${company_name}`;
+    db.query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [activityMsg, userName]);
 
     res.json({
       success: true,
