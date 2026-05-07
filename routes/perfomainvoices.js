@@ -147,7 +147,8 @@ router.get("/list", async (req, res) => {
         pi.status,
         pi.created_at,
         q.company_name,
-        q.lead_id
+        q.lead_id,
+        q.grand_total AS quotation_grand_total
       FROM proforma_invoices pi
       LEFT JOIN quotation q ON q.id = pi.quotation_id
       ORDER BY pi.pi_id DESC
@@ -201,7 +202,8 @@ router.get("/filter", async (req, res) => {
         pi.status,
         pi.created_at,
         q.company_name,
-        q.lead_id
+        q.lead_id,
+        q.grand_total AS quotation_grand_total
       FROM proforma_invoices pi
       LEFT JOIN quotation q ON q.id = pi.quotation_id
       WHERE 1=1
