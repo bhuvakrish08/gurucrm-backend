@@ -47,7 +47,9 @@ app.use("/api/organizations", organizationRoutes);
 app.use("/api/role-master", roleMasterRoutes);
 app.use("/api/designation-master", designationMasterRoutes);
 app.use("/api/inquiry-lead-category", inquiryLeadCategoryRoutes);
-app.use("/api/inquiry-lead-Source", inquiryLeadSourceRoutes);
+  
+app.use("/api/inquiry-lead-source", inquiryLeadSourceRoutes);
+
 app.use("/api/inquiry-lead-activity", inquiryLeadActivityRoutes);
 app.use("/api/ticket-type", ticketTypeRoutes);
 app.use("/api/ticket-source", ticketSourceRoutes);
