@@ -57,6 +57,8 @@ router.get("/read", async (req, res) => {
         q.proforma_percentage,
         q.assignee,
         q.follow_up_date,
+        q.updated_by,
+        q.updated_at,
         q.created_at as quotation_created_at,
         q_first.first_quotation_date,
         IF(q_approved.approved_count > 0, 1, 0) AS has_approved
@@ -113,6 +115,8 @@ router.get("/history/:lead_id", async (req, res) => {
 
 // =============================
 // INSERT QUOTATION + FILES
+// ✅ updated_by = logged-in user name
+// ✅ updated_at = CURRENT_TIMESTAMP (auto)
 // =============================
 
 router.post(
@@ -137,18 +141,50 @@ router.post(
         tax,
         amount,
         description,
-        activity_type
+        activity_type,
       } = req.body;
+
+      // ✅ Get logged-in user name from JWT token
+      const updatedBy =
+        req.user?.username ||
+        req.user?.name ||
+        req.user?.email ||
+        "Unknown";
+
+      // =============================
+      // INSERT QUOTATION
+      // ✅ updated_by saves who inserted
+      // ✅ updated_at saves CURRENT_TIMESTAMP
+      // =============================
 
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
-         (lead_id, company_name, customer_name, lead_title, quotation_status, follow_up_date, quotation_no, quotation_date, grand_total, assignee, rate, discount, tax, amount, description, activity_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          lead_id || null,
+         (
+          lead_id,
           company_name,
           customer_name,
           lead_title,
+          quotation_status,
+          follow_up_date,
+          quotation_no,
+          quotation_date,
+          grand_total,
+          assignee,
+          rate,
+          discount,
+          tax,
+          amount,
+          description,
+          activity_type,
+          updated_by,
+          updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [
+          lead_id || null,
+          company_name || null,
+          customer_name || null,
+          lead_title || null,
           quotation_status || "Pending",
           follow_up_date || null,
           quotation_no || null,
@@ -161,40 +197,65 @@ router.post(
           amount || null,
           description || null,
           activity_type || null,
+          updatedBy, // ✅ logged-in user name saved on INSERT
         ]
       );
 
       const quotationId = result.insertId;
 
-      // Save files to quotation_followup_files
-      if (req.files?.length > 0) {
+      // =============================
+      // SAVE FILES
+      // =============================
+
+      if (req.files && req.files.length > 0) {
         const fileValues = req.files.map((f) => [
           quotationId,
           f.originalname,
-          f.path,       // Cloudinary URL
-          f.filename,   // public_id
+          f.path,
+          f.filename,
         ]);
 
         await db.promise().query(
           `INSERT INTO quotation_followup_files 
-           (quot_follow_up_id, file_name, file_path, public_id) VALUES ?`,
+          (quot_follow_up_id, file_name, file_path, public_id)
+          VALUES ?`,
           [fileValues]
         );
       }
 
-      // LOG ACTIVITY
-      const userName = req.user?.username || "Someone";
-      const activityMsg = `${userName} created a new quotation: ${quotation_no} for ${company_name}`;
-      await db.promise().query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [activityMsg, userName]);
+      // =============================
+      // ACTIVITY LOG (SAFE)
+      // =============================
 
-      res.json({
+      try {
+        const userName =
+          req.user?.username ||
+          req.user?.name ||
+          req.user?.email ||
+          "Unknown User";
+
+        const activityMsg = `${userName} created quotation ${quotation_no}`;
+
+        await db.promise().query(
+          "INSERT INTO activities (message, user_name) VALUES (?, ?)",
+          [activityMsg, userName]
+        );
+      } catch (activityErr) {
+        console.log("Activity Log Error:", activityErr.message);
+      }
+
+      return res.status(201).json({
         success: true,
         message: "Quotation created successfully",
-        id: quotationId,
+        quotationId,
+        updated_by: updatedBy, // ✅ Return to frontend for display
       });
     } catch (err) {
-      console.log(err);
-      res.status(500).json({ success: false, message: err.message });
+      console.log("INSERT QUOTATION ERROR:", err);
+      return res.status(500).json({
+        success: false,
+        message: err.message || "Something went wrong",
+      });
     }
   }
 );
@@ -230,6 +291,8 @@ router.get("/filter", async (req, res) => {
         q.amount,
         q.assignee,
         q.follow_up_date,
+        q.updated_by,
+        q.updated_at,
         q.created_at as quotation_created_at,
         q_first.first_quotation_date,
         IF(q_approved.approved_count > 0, 1, 0) AS has_approved
@@ -294,14 +357,15 @@ router.get("/filter", async (req, res) => {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
   }
-
 });
 
 // =============================
 // UPDATE QUOTATION DATA
+// ✅ updated_by = logged-in user name (je edit kare te)
+// ✅ updated_at = CURRENT_TIMESTAMP (auto set)
 // =============================
 
-router.put("/update/:id", async (req, res) => {
+router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
     const {
       quotation_no,
@@ -312,8 +376,16 @@ router.put("/update/:id", async (req, res) => {
       tax,
       grand_total,
       description,
-      assignee
+      assignee,
     } = req.body;
+
+    // ✅ Get logged-in user name from JWT token
+    // Je user login hoi ene naam UPDATE THAASHE - ALWAYS
+    const updatedBy =
+      req.user?.username ||
+      req.user?.name ||
+      req.user?.email ||
+      "Unknown";
 
     await db.promise().query(
       `UPDATE quotation SET 
@@ -325,7 +397,9 @@ router.put("/update/:id", async (req, res) => {
         tax = ?, 
         grand_total = ?, 
         description = ?, 
-        assignee = ? 
+        assignee = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [
         quotation_no || null,
@@ -337,16 +411,38 @@ router.put("/update/:id", async (req, res) => {
         grand_total || null,
         description || null,
         assignee || null,
-        req.params.id
+        updatedBy, // ✅ logged-in user name saved on UPDATE
+        req.params.id,
       ]
     );
 
-    res.json({ success: true, message: "Quotation updated successfully" });
+    // ✅ Activity log for update too
+    try {
+      const userName =
+        req.user?.username ||
+        req.user?.name ||
+        req.user?.email ||
+        "Unknown User";
+
+      const activityMsg = `${userName} updated quotation ${quotation_no}`;
+
+      await db.promise().query(
+        "INSERT INTO activities (message, user_name) VALUES (?, ?)",
+        [activityMsg, userName]
+      );
+    } catch (activityErr) {
+      console.log("Activity Log Error:", activityErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: "Quotation updated successfully",
+      updated_by: updatedBy, // ✅ Return to frontend
+    });
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
   }
-  
 });
 
 // =============================
@@ -358,7 +454,9 @@ router.put("/update-status/:id", async (req, res) => {
     const { quotation_status } = req.body;
 
     if (quotation_status === "Approved") {
-      const [qRow] = await db.promise().query("SELECT lead_id FROM quotation WHERE id = ?", [req.params.id]);
+      const [qRow] = await db
+        .promise()
+        .query("SELECT lead_id FROM quotation WHERE id = ?", [req.params.id]);
       const leadId = qRow[0]?.lead_id;
 
       if (leadId) {
@@ -401,20 +499,17 @@ router.get("/files/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
-    // Check if the quotation being deleted is Approved
     const [qRow] = await db.promise().query(
       "SELECT lead_id, quotation_status FROM quotation WHERE id = ?",
       [req.params.id]
     );
     const deletedQuotation = qRow[0];
 
-    // Get files to delete from Cloudinary
     const [files] = await db.promise().query(
       "SELECT public_id FROM quotation_followup_files WHERE quot_follow_up_id = ?",
       [req.params.id]
     );
 
-    // Delete from Cloudinary
     for (const file of files) {
       if (file.public_id) {
         try {
@@ -425,17 +520,19 @@ router.delete("/:id", async (req, res) => {
       }
     }
 
-    // Delete files from DB
     await db.promise().query(
       "DELETE FROM quotation_followup_files WHERE quot_follow_up_id = ?",
       [req.params.id]
     );
 
-    // Delete quotation
-    await db.promise().query("DELETE FROM quotation WHERE id = ?", [req.params.id]);
+    await db
+      .promise()
+      .query("DELETE FROM quotation WHERE id = ?", [req.params.id]);
 
-    // Revert status if we deleted the Approved one
-    if (deletedQuotation && deletedQuotation.quotation_status === "Approved") {
+    if (
+      deletedQuotation &&
+      deletedQuotation.quotation_status === "Approved"
+    ) {
       await db.promise().query(
         "UPDATE quotation SET quotation_status = 'Pending' WHERE lead_id = ?",
         [deletedQuotation.lead_id]
