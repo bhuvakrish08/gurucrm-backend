@@ -14,8 +14,7 @@ router.get("/read", (req, res) => {
       l.lead_id,
       l.company_name,
       l.customer_name,
-      l.lead_title,
-      pc.name AS product_category,
+      l.reference,
       ls.name AS source,
       l.assignee,
       l.status,
@@ -30,8 +29,6 @@ router.get("/read", (req, res) => {
         LIMIT 1
       ) AS next_follow_up_date
     FROM lead l
-    LEFT JOIN product_category pc
-      ON pc.id = l.product_category
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
     ORDER BY l.lead_id DESC
@@ -64,9 +61,7 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.lead_id,
       l.company_name,
       l.customer_name,
-      l.lead_title,
-      pc.name AS product_category,
-      p.product_name,
+      l.reference,
       ls.name AS source,
       l.priority,
       l.assignee,
@@ -77,10 +72,6 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.updated_by,
       l.updated_at
     FROM lead l
-    LEFT JOIN product_category pc
-      ON pc.id = l.product_category
-    LEFT JOIN product_master p
-      ON p.product_name = l.product_name
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
     LEFT JOIN inquiry_lead_category lc
@@ -118,9 +109,7 @@ router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, re
       l.lead_id,
       l.company_name,
       l.customer_name,
-      l.lead_title,
-      pc.name AS product_category,
-      p.product_name,
+      l.reference,
       ls.name AS source,
       l.priority,
       l.assignee,
@@ -131,10 +120,6 @@ router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, re
       l.updated_by,
       l.updated_at
     FROM lead l
-    LEFT JOIN product_category pc
-      ON pc.id = l.product_category
-    LEFT JOIN product_master p
-      ON p.product_name = l.product_name  -- ✅ FIXED: was p.id = l.product_name (wrong)
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
     LEFT JOIN inquiry_lead_category lc
@@ -178,9 +163,7 @@ router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res)
       l.lead_id,
       l.company_name,
       l.customer_name,
-      l.lead_title,
-      l.product_category,
-      l.product_name,
+      l.reference,
       l.source,
       l.priority,
       l.assignee,
@@ -225,11 +208,9 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
-    lead_title,
+    reference,
     source,
     status,
-    product_category,
-    product_name,
     priority,
     assignee,
     category,
@@ -243,11 +224,9 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
     SET 
       company_name = ?,
       customer_name = ?,
-      lead_title = ?,
+      reference = ?,
       source = ?,
       status = ?,
-      product_category = ?,
-      product_name = ?,
       priority = ?,
       assignee = ?,
       category = ?,
@@ -260,11 +239,9 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   db.query(sql, [
     company_name,
     customer_name,
-    lead_title,
+    reference,
     source,
     status,
-    product_category,
-    product_name,
     priority,
     assignee,
     category,
@@ -303,11 +280,9 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
-    lead_title,
+    reference,
     source,
     status,
-    product_category,
-    product_name,
     priority,
     assignee,
     category,
@@ -319,29 +294,25 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     (
       company_name,
       customer_name,
-      lead_title,
+      reference,
       source,
       status,
-      product_category,
-      product_name,
       priority,
       assignee,
       category,
       description,
       created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   // ✅ FIXED: userName values array ma add karyo
   const values = [
     company_name,
     customer_name,
-    lead_title,
+    reference,
     source || null,
     status,
-    product_category,
-    product_name,
     priority || null,
     assignee,
     category || null,
@@ -359,7 +330,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       });
     }
 
-    const activityMsg = `${userName} added a new lead: ${lead_title} for ${company_name || "N/A"}`;
+    const activityMsg = `${userName} added a new lead: ${reference} for ${company_name || "N/A"}`;
     db.query(
       "INSERT INTO activities (message, user_name) VALUES (?, ?)",
       [activityMsg, userName],
@@ -481,8 +452,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
-    lead_title,
-    product_category,
+    reference,
     source,
     assignee,
     status,
@@ -497,8 +467,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.lead_id,
       l.company_name,
       l.customer_name,
-      l.lead_title,
-      pc.name AS product_category,
+      l.reference,
       ls.name AS source,
       l.assignee,
       l.status,
@@ -513,8 +482,6 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
         LIMIT 1
       ) AS next_follow_up_date
     FROM lead l
-    LEFT JOIN product_category pc
-      ON pc.id = l.product_category
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
     WHERE 1=1
@@ -532,14 +499,9 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     values.push(`%${customer_name}%`);
   }
 
-  if (lead_title) {
-    sql += " AND l.lead_title LIKE ?";
-    values.push(`%${lead_title}%`);
-  }
-
-  if (product_category) {
-    sql += " AND l.product_category = ?";
-    values.push(product_category);
+  if (reference) {
+    sql += " AND l.reference LIKE ?";
+    values.push(`%${reference}%`);
   }
 
   if (source) {
