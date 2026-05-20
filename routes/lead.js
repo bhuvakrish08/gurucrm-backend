@@ -7,9 +7,11 @@ const router = express.Router();
 /* =====================================
    READ ALL LEADS (for table listing)
 ===================================== */
-router.get("/read", (req, res) => {
+router.get("/read", authenticateAndAuthorize(), (req, res) => {
+  const loggedInUser = req.user.username;
+  const loggedInRole = req.user.role;
 
-  const sql = `
+  let sql = `
     SELECT 
       l.lead_id,
       l.company_name,
@@ -31,31 +33,41 @@ router.get("/read", (req, res) => {
     FROM lead l
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
-    ORDER BY l.lead_id DESC
   `;
 
-  db.query(sql, (err, result) => {
+  let values = [];
+
+  // ✅ Admin sees all leads
+  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin") {
+    sql += `
+      WHERE FIND_IN_SET(?, REPLACE(l.assignee, ', ', ','))
+    `;
+
+    values.push(loggedInUser);
+  }
+
+  sql += ` ORDER BY l.lead_id DESC`;
+
+  db.query(sql, values, (err, result) => {
     if (err) {
       console.log(err);
+
       return res.status(500).json({
         success: false,
-        error: err
+        error: err,
       });
     }
 
     res.json({
       success: true,
-      result
+      result,
     });
   });
 });
-
-
 /* =====================================
    GET ALL LEADS (sales route)
 ===================================== */
 router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
-
   const sql = `
     SELECT
       l.lead_id,
@@ -83,28 +95,29 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
     if (err) {
       return res.status(500).json({
         success: false,
-        error: err
+        error: err,
       });
     }
 
     res.json({
       success: true,
       count: result.length,
-      data: result
+      data: result,
     });
   });
 });
-
 
 /* =====================================
    VIEW SINGLE LEAD DETAILS (for View Modal)
    ✅ FIXED: product_master JOIN consistent with /sales/leads
 ===================================== */
-router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, res) => {
+router.get(
+  "/sales/leads/view-details/:id",
+  authenticateAndAuthorize(),
+  (req, res) => {
+    const id = req.params.id;
 
-  const id = req.params.id;
-
-  const sql = `
+    const sql = `
     SELECT
       l.lead_id,
       l.company_name,
@@ -127,38 +140,40 @@ router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, re
     WHERE l.lead_id = ?
   `;
 
-  db.query(sql, [id], (err, result) => {
-    if (err) {
-      console.log(err);
-      return res.status(500).json({
-        success: false,
-        error: err
-      });
-    }
+    db.query(sql, [id], (err, result) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({
+          success: false,
+          error: err,
+        });
+      }
 
-    if (!result || result.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found"
-      });
-    }
+      if (!result || result.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Lead not found",
+        });
+      }
 
-    res.json({
-      success: true,
-      lead: result[0]
+      res.json({
+        success: true,
+        lead: result[0],
+      });
     });
-  });
-});
-
+  },
+);
 
 /* =====================================
    VIEW SINGLE LEAD (for Edit page)
 ===================================== */
-router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res) => {
+router.get(
+  "/sales/leads/view-leads/:id",
+  authenticateAndAuthorize(),
+  (req, res) => {
+    const id = req.params.id;
 
-  const id = req.params.id;
-
-  const sql = `
+    const sql = `
     SELECT
       l.lead_id,
       l.company_name,
@@ -175,34 +190,33 @@ router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res)
     WHERE l.lead_id = ?
   `;
 
-  db.query(sql, [id], (err, result) => {
-    if (err) {
-      return res.status(500).json({
-        success: false,
-        error: err
-      });
-    }
+    db.query(sql, [id], (err, result) => {
+      if (err) {
+        return res.status(500).json({
+          success: false,
+          error: err,
+        });
+      }
 
-    if (!result || result.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found"
-      });
-    }
+      if (!result || result.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Lead not found",
+        });
+      }
 
-    res.json({
-      success: true,
-      lead: result[0]
+      res.json({
+        success: true,
+        lead: result[0],
+      });
     });
-  });
-});
-
+  },
+);
 
 /* =====================================
    UPDATE LEAD
 ===================================== */
 router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
-
   const leadId = req.params.id;
 
   const {
@@ -214,7 +228,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
     priority,
     assignee,
     category,
-    description
+    description,
   } = req.body;
 
   const updated_by = req.user.username;
@@ -236,35 +250,38 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
     WHERE lead_id = ?
   `;
 
-  db.query(sql, [
-    company_name,
-    customer_name,
-    reference,
-    source,
-    status,
-    priority,
-    assignee,
-    category,
-    description,
-    updated_by,
-    leadId
-  ], (err, result) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({
-        success: false,
-        message: "Error updating lead",
-        error: err
+  db.query(
+    sql,
+    [
+      company_name,
+      customer_name,
+      reference,
+      source,
+      status,
+      priority,
+      assignee,
+      category,
+      description,
+      updated_by,
+      leadId,
+    ],
+    (err, result) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          success: false,
+          message: "Error updating lead",
+          error: err,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Lead updated successfully",
       });
-    }
-
-    res.json({
-      success: true,
-      message: "Lead updated successfully"
-    });
-  });
+    },
+  );
 });
-
 
 /* =====================================
    ADD NEW LEAD
@@ -272,7 +289,6 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
 */
 
 router.post("/insert", authenticateAndAuthorize(), (req, res) => {
-
   console.log("Incoming lead data:", req.body);
 
   const userName = req.user?.username || "Unknown User";
@@ -286,7 +302,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     priority,
     assignee,
     category,
-    description
+    description,
   } = req.body;
 
   const sql = `
@@ -317,7 +333,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     assignee,
     category || null,
     description,
-    userName          // ← આ જ missing હતું!
+    userName, // ← આ જ missing હતું!
   ];
 
   db.query(sql, values, (err, result) => {
@@ -326,7 +342,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       return res.status(500).json({
         success: false,
         message: "Database insert failed",
-        error: err.message
+        error: err.message,
       });
     }
 
@@ -336,13 +352,13 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       [activityMsg, userName],
       (actErr) => {
         if (actErr) console.error("Activity log error:", actErr);
-      }
+      },
     );
 
     res.json({
       success: true,
       message: "Lead saved successfully",
-      lead_id: result.insertId
+      lead_id: result.insertId,
     });
   });
 });
@@ -352,7 +368,6 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
    ✅ FIXED: authenticateAndAuthorize() middleware add karyo
 ===================================== */
 router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
-
   const id = req.params.id;
   const { status } = req.body;
 
@@ -374,67 +389,61 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
       return res.status(500).json({
         success: false,
         message: "Database error",
-        error: err
+        error: err,
       });
     }
 
     res.json({
       success: true,
-      message: "Status updated successfully"
+      message: "Status updated successfully",
     });
   });
 });
-
 
 /* =====================================
    DELETE LEAD (with follow-up cleanup)
    ✅ FIXED: authenticateAndAuthorize() middleware add karyo
 ===================================== */
 router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
-
   const leadId = req.params.id;
 
   try {
     await db.promise().query("START TRANSACTION");
 
-    const [lead] = await db.promise().query(
-      "SELECT lead_id FROM lead WHERE lead_id = ?",
-      [leadId]
-    );
+    const [lead] = await db
+      .promise()
+      .query("SELECT lead_id FROM lead WHERE lead_id = ?", [leadId]);
 
     if (lead.length === 0) {
       await db.promise().query("ROLLBACK");
       return res.status(404).json({ message: "Lead not found" });
     }
 
-    const [followUps] = await db.promise().query(
-      "SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?",
-      [leadId]
-    );
+    const [followUps] = await db
+      .promise()
+      .query("SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?", [
+        leadId,
+      ]);
 
     const ids = followUps.map((f) => f.follow_up_id);
 
     if (ids.length > 0) {
-      await db.promise().query(
-        "DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)",
-        [ids]
-      );
+      await db
+        .promise()
+        .query("DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)", [
+          ids,
+        ]);
     }
 
-    await db.promise().query(
-      "DELETE FROM lead_follow_up WHERE lead_id = ?",
-      [leadId]
-    );
+    await db
+      .promise()
+      .query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
 
-    await db.promise().query(
-      "DELETE FROM lead WHERE lead_id = ?",
-      [leadId]
-    );
+    await db.promise().query("DELETE FROM lead WHERE lead_id = ?", [leadId]);
 
     await db.promise().query("COMMIT");
 
     res.json({ success: true, message: "Lead deleted successfully" });
-
   } catch (err) {
     await db.promise().query("ROLLBACK");
     console.log(err);
@@ -442,13 +451,11 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
   }
 });
 
-
 /* =====================================
    FILTER LEADS
    ✅ FIXED: single date follow-up filter handle karyo
 ===================================== */
 router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
-
   const {
     company_name,
     customer_name,
@@ -459,7 +466,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     from_created,
     to_created,
     from_followup,
-    to_followup
+    to_followup,
   } = req.query;
 
   let sql = `
@@ -574,23 +581,21 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       console.log(err);
       return res.status(500).json({
         success: false,
-        error: err
+        error: err,
       });
     }
 
     res.json({
       success: true,
-      data: result
+      data: result,
     });
   });
 });
-
 
 /* =====================================
    GET CUSTOMER LIST FOR FILTER
 ===================================== */
 router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
-
   const sql = `
     SELECT DISTINCT
       customer_name
@@ -605,13 +610,13 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
       console.log(err);
       return res.status(500).json({
         success: false,
-        error: err
+        error: err,
       });
     }
 
     res.json({
       success: true,
-      data: result
+      data: result,
     });
   });
 });
