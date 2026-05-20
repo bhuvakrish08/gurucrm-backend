@@ -46,7 +46,7 @@ router.get("/read", async (req, res) => {
         l.lead_id, 
         l.company_name, 
         l.customer_name, 
-        l.lead_title, 
+        l.reference, 
         l.status as lead_status,
         q.id as latest_quotation_id,
         q.quotation_no,
@@ -129,7 +129,7 @@ router.post(
         lead_id,
         company_name,
         customer_name,
-        lead_title,
+        reference,
         quotation_status,
         follow_up_date,
         quotation_no,
@@ -163,7 +163,7 @@ router.post(
           lead_id,
           company_name,
           customer_name,
-          lead_title,
+          reference,
           quotation_status,
           follow_up_date,
           quotation_no,
@@ -184,7 +184,7 @@ router.post(
           lead_id || null,
           company_name || null,
           customer_name || null,
-          lead_title || null,
+          reference || null,
           quotation_status || "Pending",
           follow_up_date || null,
           quotation_no || null,
@@ -269,7 +269,7 @@ router.get("/filter", async (req, res) => {
     const {
       company_name,
       customer_name,
-      lead_title,
+      reference,
       assignee,
       quotation_status,
       from_date,
@@ -281,7 +281,7 @@ router.get("/filter", async (req, res) => {
         l.lead_id, 
         l.company_name, 
         l.customer_name, 
-        l.lead_title, 
+        l.reference, 
         l.status as lead_status,
         q.id as latest_quotation_id,
         q.quotation_no,
@@ -332,9 +332,9 @@ router.get("/filter", async (req, res) => {
       sql += " AND l.customer_name LIKE ?";
       values.push(`%${customer_name}%`);
     }
-    if (lead_title) {
-      sql += " AND l.lead_title LIKE ?";
-      values.push(`%${lead_title}%`);
+    if (reference) {
+      sql += " AND l.reference LIKE ?";
+      values.push(`%${reference}%`);
     }
     if (assignee) {
       sql += " AND FIND_IN_SET(?, q.assignee)";
