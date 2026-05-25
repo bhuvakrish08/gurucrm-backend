@@ -93,7 +93,7 @@ const sendEmail = async (to, otp) => {
           "api-key": process.env.BREVO_API_KEY,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
 
     console.log("✅ Brevo Response:", response.data);
@@ -129,20 +129,20 @@ router.post("/login", (req, res) => {
         {
           id: user.id,
           role: user.role,
-          username: user.username || user.name,
+          username: (user.username || user.name || "").split(" ")[0],
         },
         JWT_SECRET,
-        { expiresIn: "5h" }
+        { expiresIn: "5h" },
       );
 
       res.json({
         message: "Login successful",
         token,
         role: user.role,
-        username: user.username || user.name,
+        username: (user.username || user.name || "").split(" ")[0],
         id: user.id,
       });
-    }
+    },
   );
 });
 
@@ -184,8 +184,7 @@ router.post("/send-otp", (req, res) => {
       "UPDATE users SET otp=?, otp_expiry=? WHERE id=?",
       [otp, expiry, userId],
       async (err2, result) => {
-        if (err2)
-          return res.status(500).json({ message: "DB update error" });
+        if (err2) return res.status(500).json({ message: "DB update error" });
 
         console.log("✅ UPDATE RESULT:", result);
         console.log("🔢 OTP:", otp);
@@ -196,7 +195,7 @@ router.post("/send-otp", (req, res) => {
         } catch (mailErr) {
           res.status(500).json({ message: "Error sending email" });
         }
-      }
+      },
     );
   });
 });
@@ -245,7 +244,7 @@ router.post("/reset-password", (req, res) => {
       if (err) return res.status(500).json({ message: "DB error" });
 
       res.json({ message: "Password updated successfully" });
-    }
+    },
   );
 });
 

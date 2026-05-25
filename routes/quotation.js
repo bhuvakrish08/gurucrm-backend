@@ -129,4 +129,7 @@ router.get("/quote", (req, res) => {
 });
 
 
+
+
+
 module.exports = router;
