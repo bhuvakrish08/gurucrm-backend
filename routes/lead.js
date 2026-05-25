@@ -623,4 +623,157 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
   });
 });
 
+  let sql = `
+    SELECT 
+      l.lead_id,
+      l.company_name,
+      l.customer_name,
+      l.reference,
+      ls.name AS source,
+      l.assignee,
+      l.status,
+      l.created_at,
+      l.updated_by,
+    l.updated_at,
+NOW() AS server_time,
+(
+        SELECT f.follow_up_date
+        FROM lead_follow_up f
+        WHERE f.lead_id = l.lead_id
+        ORDER BY f.follow_up_date DESC
+        LIMIT 1
+      ) AS next_follow_up_date
+    FROM lead l
+    LEFT JOIN inquiry_lead_source ls
+      ON ls.id = l.source
+    WHERE 1=1
+  `;
+
+  let values = [];
+
+  if (company_name) {
+    sql += " AND l.company_name LIKE ?";
+    values.push(`%${company_name}%`);
+  }
+
+  if (customer_name) {
+    sql += " AND l.customer_name LIKE ?";
+    values.push(`%${customer_name}%`);
+  }
+
+  if (reference) {
+    sql += " AND l.reference LIKE ?";
+    values.push(`%${reference}%`);
+  }
+
+  if (source) {
+    sql += " AND l.source = ?";
+    values.push(source);
+  }
+
+  if (assignee) {
+    sql += " AND FIND_IN_SET(?, l.assignee)";
+    values.push(assignee);
+  }
+
+  if (status) {
+    sql += " AND l.status = ?";
+    values.push(status);
+  }
+
+  // ✅ FIXED: created date - single ya range banne handle thay
+  if (from_created && to_created) {
+    sql += " AND DATE(l.created_at) BETWEEN ? AND ?";
+    values.push(from_created, to_created);
+  } else if (from_created) {
+    sql += " AND DATE(l.created_at) >= ?";
+    values.push(from_created);
+  } else if (to_created) {
+    sql += " AND DATE(l.created_at) <= ?";
+    values.push(to_created);
+  }
+
+  // ✅ FIXED: follow-up date - single ya range banne handle thay
+  if (from_followup && to_followup) {
+    sql += `
+      AND (
+        SELECT f.follow_up_date
+        FROM lead_follow_up f
+        WHERE f.lead_id = l.lead_id
+        ORDER BY f.follow_up_date DESC
+        LIMIT 1
+      ) BETWEEN ? AND ?
+    `;
+    values.push(from_followup, to_followup);
+  } else if (from_followup) {
+    sql += `
+      AND (
+        SELECT f.follow_up_date
+        FROM lead_follow_up f
+        WHERE f.lead_id = l.lead_id
+        ORDER BY f.follow_up_date DESC
+        LIMIT 1
+      ) >= ?
+    `;
+    values.push(from_followup);
+  } else if (to_followup) {
+    sql += `
+      AND (
+        SELECT f.follow_up_date
+        FROM lead_follow_up f
+        WHERE f.lead_id = l.lead_id
+        ORDER BY f.follow_up_date DESC
+        LIMIT 1
+      ) <= ?
+    `;
+    values.push(to_followup);
+  }
+
+  sql += " ORDER BY l.lead_id DESC";
+
+  db.query(sql, values, (err, result) => {
+    if (err) {
+      console.log(err);
+      return res.status(500).json({
+        success: false,
+        error: err,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  });
+});
+
+/* =====================================
+   GET CUSTOMER LIST FOR FILTER
+===================================== */
+router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
+  const sql = `
+    SELECT DISTINCT
+      customer_name
+    FROM lead
+    WHERE customer_name IS NOT NULL
+    AND customer_name != ''
+    ORDER BY customer_name ASC
+  `;
+
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.log(err);
+      return res.status(500).json({
+        success: false,
+        error: err,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  });
+});
+
 module.exports = router;

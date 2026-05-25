@@ -14,48 +14,121 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
   const { percentage } = req.body;
 
   try {
-    const [quotation] = await db
-      .promise()
-      .query(
-        "SELECT * FROM quotation WHERE id = ? AND quotation_status = 'Won'",
-        [quotation_id]
-      );
+    // ==========================================
+    // CHECK QUOTATION
+    // ==========================================
+
+    const [quotation] = await db.promise().query(
+      `SELECT * FROM quotation 
+       WHERE id = ? 
+       AND quotation_status IN ('Won', 'Approved')`,
+      [quotation_id],
+    );
 
     if (quotation.length === 0) {
-      return res.status(400).json({ message: "Quotation not Won or not found" });
+      return res.status(400).json({
+        success: false,
+        message: "Quotation not found or not Won",
+      });
     }
 
     const q = quotation[0];
+
+    // ==========================================
+    // CHECK TOTAL EXISTING %
+    // ==========================================
+
+    const [existingPI] = await db.promise().query(
+      `SELECT SUM(proforma_percentage) as total_percentage
+       FROM proforma_invoices
+       WHERE quotation_id = ?`,
+      [quotation_id],
+    );
+
+    const usedPercentage = Number(existingPI[0]?.total_percentage || 0);
+
+    const newPercentage = Number(percentage);
+
+    if (usedPercentage + newPercentage > 100) {
+      return res.status(400).json({
+        success: false,
+        message: `Only ${100 - usedPercentage}% remaining`,
+      });
+    }
+
+    // ==========================================
+    // CALCULATE AMOUNT
+    // ==========================================
+
+    const amount = (Number(q.grand_total) * newPercentage) / 100;
+
     const pi_no = `PI-${Date.now()}`;
 
+    // ==========================================
+    // INSERT PI
+    // ==========================================
+
     const [piResult] = await db.promise().query(
-      `INSERT INTO proforma_invoices 
-       (pi_no, pi_date, quotation_id, customer_name, quotation_no, assignee, total, proforma_percentage)
-       VALUES (?, CURDATE(), ?, ?, ?, ?, ?, 0)`,
-      [pi_no, q.id, q.customer_name, q.quotation_no, q.assignee, q.grand_total]
+      `INSERT INTO proforma_invoices
+      (
+        pi_no,
+        pi_date,
+        quotation_id,
+        customer_name,
+        quotation_no,
+        assignee,
+        total,
+        proforma_percentage,
+        status
+      )
+      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        pi_no,
+        q.id,
+        q.customer_name,
+        q.quotation_no,
+        q.assignee,
+        amount,
+        newPercentage,
+        "partial",
+      ],
     );
+
     const pi_id = piResult.insertId;
 
-    const amount = (q.grand_total * percentage) / 100;
+    // ==========================================
+    // INSERT FOLLOWUP
+    // ==========================================
 
     await db.promise().query(
-      `INSERT INTO pi_follow_up (pi_id, proforma_percentage, total) VALUES (?, ?, ?)`,
-      [pi_id, percentage, amount]
+      `INSERT INTO pi_follow_up
+      (pi_id, proforma_percentage, total)
+      VALUES (?, ?, ?)`,
+      [pi_id, newPercentage, amount],
     );
+
+    // ==========================================
+    // UPDATE QUOTATION
+    // ==========================================
 
     await db.promise().query(
-      `UPDATE proforma_invoices 
-       SET 
-         proforma_percentage = (SELECT SUM(proforma_percentage) FROM pi_follow_up WHERE pi_id = ?),
-         total = (SELECT SUM(total) FROM pi_follow_up WHERE pi_id = ?)
-       WHERE pi_id = ?`,
-      [pi_id, pi_id, pi_id]
+      `UPDATE quotation
+       SET proforma_percentage = ?
+       WHERE id = ?`,
+      [usedPercentage + newPercentage, q.id],
     );
 
-    res.json({ message: "PI Created Successfully", pi_id });
+    return res.json({
+      success: true,
+      message: "PI Created Successfully",
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.log(err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 });
 
