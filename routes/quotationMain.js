@@ -565,16 +565,8 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
 // =============================
-// UPDATE ASSIGNEE (WITH HISTORY LOG)
+// UPDATE ASSIGNEE (WITH HISTORY LOG + DESCRIPTION)
 // =============================
 
 router.put(
@@ -582,7 +574,8 @@ router.put(
   authenticateAndAuthorize(),
   async (req, res) => {
     try {
-      const { assignee } = req.body;
+      // ✅ description field પણ receive કરો
+      const { assignee, description } = req.body;
       const lead_id = req.params.lead_id;
 
       if (assignee === undefined) {
@@ -618,12 +611,13 @@ router.put(
           assigneeLog = [];
         }
 
-        // Push new log entry
+        // ✅ Push new log entry WITH description
         assigneeLog.push({
           previous_assignee: previousAssignee,
           new_assignee: assignee || "",
           changed_by: updatedBy,
           changed_at: new Date().toISOString(),
+          description: description || "", // ✅ NEW FIELD
         });
 
         const updatedLog = JSON.stringify(assigneeLog);
@@ -664,12 +658,14 @@ router.put(
 
         const lead = leadRow[0];
 
+        // ✅ Initial log WITH description
         const initialLog = JSON.stringify([
           {
             previous_assignee: "",
             new_assignee: assignee || "",
             changed_by: updatedBy,
             changed_at: new Date().toISOString(),
+            description: description || "", // ✅ NEW FIELD
           },
         ]);
 
@@ -821,7 +817,6 @@ router.delete("/:id", async (req, res) => {
 
 router.put("/update-main-status/:id", async (req, res) => {
   try {
-    // ONLY latest quotation convert to WON
     await db
       .promise()
       .query("UPDATE quotation SET quotation_status = 'Won' WHERE id = ?", [
@@ -834,7 +829,6 @@ router.put("/update-main-status/:id", async (req, res) => {
     });
   } catch (err) {
     console.log(err);
-
     res.status(500).json({
       success: false,
       message: err.message,
