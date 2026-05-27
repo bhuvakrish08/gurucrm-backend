@@ -77,7 +77,7 @@ app.use("/api/lead-follow-up",lead_follow_up)
 app.use("/api/quotation", quotationMainRoutes)
 app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
-app.use("/quotation-revision", quotationRevisionRoutes);
+app.use("/api/quotation-revision", quotationRevisionRoutes);
 
 
 

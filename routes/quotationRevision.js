@@ -76,8 +76,7 @@ function validateUploadedFiles(req) {
 // INSERT QUOTATION REVISION
 // ======================================
 
-router.post(
-  "/insert",
+router.post("/insert",
   authenticateAndAuthorize(),
   upload.array("files", 5),
   async (req, res) => {
@@ -208,8 +207,7 @@ router.post(
   },
 );
 
-router.get(
-  "/:quotation_id/full-details",
+router.get("/:quotation_id/full-details",
   authenticateAndAuthorize(),
   async (req, res) => {
     try {
