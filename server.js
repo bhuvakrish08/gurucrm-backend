@@ -34,6 +34,9 @@ const lead_follow_up = require('./routes/leadFollowUp')
 const quotationMainRoutes = require('./routes/quotationMain')
 const pi = require('./routes/perfomainvoices')
 const activitiesRoutes = require('./routes/activities');
+const quotationRevisionRoutes = require("./routes/quotationRevision");
+
+
 
 const quotationRevisionRoutes = require("./routes/quotationsRevision");
 
@@ -78,7 +81,10 @@ app.use("/api/quotation", quotationMainRoutes)
 app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/quotation-revision", quotationRevisionRoutes);
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
 
 
 
