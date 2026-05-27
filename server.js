@@ -38,9 +38,6 @@ const quotationRevisionRoutes = require("./routes/quotationRevision");
 
 
 
-const quotationRevisionRoutes = require("./routes/quotationsRevision");
-
-
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
@@ -81,10 +78,6 @@ app.use("/api/quotation", quotationMainRoutes)
 app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/quotation-revision", quotationRevisionRoutes);
-<<<<<<< Updated upstream
-
-=======
->>>>>>> Stashed changes
 
 
 
