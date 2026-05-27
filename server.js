@@ -35,6 +35,9 @@ const quotationMainRoutes = require('./routes/quotationMain')
 const pi = require('./routes/perfomainvoices')
 const activitiesRoutes = require('./routes/activities');
 
+const quotationRevisionRoutes = require("./routes/quotationsRevision");
+
+
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
@@ -74,6 +77,8 @@ app.use("/api/lead-follow-up",lead_follow_up)
 app.use("/api/quotation", quotationMainRoutes)
 app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
+app.use("/quotation-revision", quotationRevisionRoutes);
+
 
 
 
