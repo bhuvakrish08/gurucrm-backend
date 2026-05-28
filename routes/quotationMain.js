@@ -41,10 +41,17 @@ const upload = multer({
 
 router.get("/read", authenticateAndAuthorize(), async (req, res) => {
   try {
-    const userRole = req.user?.role;
+    let loggedInFullName = "";
+    if (req.user?.id) {
+      const [uRows] = await db.promise().query("SELECT name FROM users WHERE id = ?", [req.user.id]);
+      if (uRows.length > 0) {
+        loggedInFullName = uRows[0].name;
+      }
+    }
     const userName =
-      req.user?.username || req.user?.name || req.user?.email || "";
+      loggedInFullName || req.user?.username || req.user?.name || req.user?.email || "";
 
+    const userRole = req.user?.role;
     const isAdminOrSuper = ["Admin", "Super Admin"].includes(userRole);
 
     let rows;
@@ -155,7 +162,8 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
         ) q_approved ON l.lead_id = q_approved.lead_id
         WHERE l.status = 'Won'
           AND (
-            FIND_IN_SET(?, q.assignee)
+            FIND_IN_SET(?, l.assignee)
+            OR FIND_IN_SET(?, q.assignee)
             OR EXISTS (
               SELECT 1 FROM quotation qa 
               WHERE qa.lead_id = l.lead_id 
@@ -164,7 +172,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           )
         ORDER BY l.created_at DESC
       `,
-        [userName, userName]
+        [userName, userName, userName]
       );
     }
 
@@ -378,9 +386,16 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
       to_date,
     } = req.query;
 
-    const userRole = req.user?.role;
+    let loggedInFullName = "";
+    if (req.user?.id) {
+      const [uRows] = await db.promise().query("SELECT name FROM users WHERE id = ?", [req.user.id]);
+      if (uRows.length > 0) {
+        loggedInFullName = uRows[0].name;
+      }
+    }
     const userName =
-      req.user?.username || req.user?.name || req.user?.email || "";
+      loggedInFullName || req.user?.username || req.user?.name || req.user?.email || "";
+    const userRole = req.user?.role;
     const isAdminOrSuper = ["Admin", "Super Admin"].includes(userRole);
 
     let sql = `
@@ -438,7 +453,8 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
     if (!isAdminOrSuper) {
       sql += `
         AND (
-          FIND_IN_SET(?, q.assignee)
+          FIND_IN_SET(?, l.assignee)
+          OR FIND_IN_SET(?, q.assignee)
           OR EXISTS (
             SELECT 1 FROM quotation qa 
             WHERE qa.lead_id = l.lead_id 
@@ -446,7 +462,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
           )
         )
       `;
-      values.push(userName, userName);
+      values.push(userName, userName, userName);
     }
 
     if (company_name) {

@@ -8,60 +8,67 @@ const router = express.Router();
    READ ALL LEADS (for table listing)
 ===================================== */
 router.get("/read", authenticateAndAuthorize(), (req, res) => {
-  const loggedInUser = req.user.username;
   const loggedInRole = req.user.role;
 
-  let sql = `
-    SELECT 
-  l.lead_id,
-  l.company_name,
-  l.customer_name,
-  l.reference,
-  ls.name AS source,
-  l.assignee,
-  l.status,
-  l.created_at,
-  l.updated_by,
-  l.updated_at,
-  NOW() AS server_time,
-  (
-    SELECT f.follow_up_date
-    FROM lead_follow_up f
-    WHERE f.lead_id = l.lead_id
-    ORDER BY f.follow_up_date DESC
-    LIMIT 1
-  ) AS next_follow_up_date
-    FROM lead l
-    LEFT JOIN inquiry_lead_source ls
-      ON ls.id = l.source
-  `;
-
-  let values = [];
-
-  // ✅ Admin sees all leads
-  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin") {
-    sql += `
-      WHERE FIND_IN_SET(?, REPLACE(l.assignee, ', ', ','))
-    `;
-
-    values.push(loggedInUser);
-  }
-
-  sql += ` ORDER BY l.lead_id DESC`;
-
-  db.query(sql, values, (err, result) => {
-    if (err) {
-      console.log(err);
-
-      return res.status(500).json({
-        success: false,
-        error: err,
-      });
+  // Fetch full name dynamically using req.user.id
+  db.query("SELECT name FROM users WHERE id = ?", [req.user.id], (err, uRows) => {
+    let loggedInUser = req.user.username;
+    if (!err && uRows && uRows.length > 0) {
+      loggedInUser = uRows[0].name;
     }
 
-    res.json({
-      success: true,
-      result,
+    let sql = `
+      SELECT 
+    l.lead_id,
+    l.company_name,
+    l.customer_name,
+    l.reference,
+    ls.name AS source,
+    l.assignee,
+    l.status,
+    l.created_at,
+    l.updated_by,
+    l.updated_at,
+    NOW() AS server_time,
+    (
+      SELECT f.follow_up_date
+      FROM lead_follow_up f
+      WHERE f.lead_id = l.lead_id
+      ORDER BY f.follow_up_date DESC
+      LIMIT 1
+    ) AS next_follow_up_date
+      FROM lead l
+      LEFT JOIN inquiry_lead_source ls
+        ON ls.id = l.source
+    `;
+
+    let values = [];
+
+    // ✅ Admin & Leads Management sees all leads
+    if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
+      sql += `
+        WHERE (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)
+      `;
+
+      values.push(loggedInUser, loggedInUser);
+    }
+
+    sql += ` ORDER BY l.lead_id DESC`;
+
+    db.query(sql, values, (err, result) => {
+      if (err) {
+        console.log(err);
+
+        return res.status(500).json({
+          success: false,
+          error: err,
+        });
+      }
+
+      res.json({
+        success: true,
+        result,
+      });
     });
   });
 });
@@ -69,7 +76,10 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
    GET ALL LEADS (sales route)
 ===================================== */
 router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
-  const sql = `
+  const loggedInUser = req.user.username;
+  const loggedInRole = req.user.role;
+
+  let sql = `
     SELECT
       l.lead_id,
       l.company_name,
@@ -89,10 +99,20 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       ON ls.id = l.source
     LEFT JOIN inquiry_lead_category lc
       ON lc.id = l.category
-    ORDER BY l.lead_id DESC
+    WHERE 1=1
   `;
 
-  db.query(sql, (err, result) => {
+  let values = [];
+
+  // ✅ Admin & Leads Management sees all leads
+  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
+    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+    values.push(loggedInUser, loggedInUser);
+  }
+
+  sql += " ORDER BY l.lead_id DESC";
+
+  db.query(sql, values, (err, result) => {
     if (err) {
       return res.status(500).json({
         success: false,
@@ -470,6 +490,9 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     to_followup,
   } = req.query;
 
+  const loggedInUser = req.user.username;
+  const loggedInRole = req.user.role;
+
   let sql = `
     SELECT 
       l.lead_id,
@@ -497,6 +520,12 @@ NOW() AS server_time,
   `;
 
   let values = [];
+
+  // ✅ Admin & Leads Management sees all leads
+  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
+    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+    values.push(loggedInUser, loggedInUser);
+  }
 
   if (company_name) {
     sql += " AND l.company_name LIKE ?";
