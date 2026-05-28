@@ -588,143 +588,180 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
 router.put(
   "/update-assignee/:lead_id",
   authenticateAndAuthorize(),
+  upload.array("files", 5),
   async (req, res) => {
     try {
-      // ✅ description field પણ receive કરો
       const { assignee, description } = req.body;
+
       const lead_id = req.params.lead_id;
 
-      if (assignee === undefined) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Assignee is required" });
+      if (!assignee) {
+        return res.status(400).json({
+          success: false,
+          message: "Assignee required",
+        });
       }
 
       const updatedBy =
-        req.user?.username ||
-        req.user?.name ||
-        req.user?.email ||
-        "Unknown";
+        req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
-      // Check if any quotations exist for this lead
-      const [existingQuotations] = await db.promise().query(
-        "SELECT id, assignee, assignee_log FROM quotation WHERE lead_id = ? ORDER BY id DESC LIMIT 1",
-        [lead_id]
+      const [quotationRows] = await db.promise().query(
+        `SELECT id,
+                  assignee,
+                  assignee_log
+           FROM quotation
+           WHERE lead_id = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+        [lead_id],
       );
 
-      if (existingQuotations && existingQuotations.length > 0) {
-        const latestQuotation = existingQuotations[0];
-        const previousAssignee = latestQuotation.assignee || "";
+      let quotationId = null;
 
-        // Parse existing log
-        let assigneeLog = [];
+      let logs = [];
+
+      if (quotationRows.length > 0) {
+        const quotation = quotationRows[0];
+
+        quotationId = quotation.id;
+
         try {
-          if (latestQuotation.assignee_log) {
-            assigneeLog = JSON.parse(latestQuotation.assignee_log);
-            if (!Array.isArray(assigneeLog)) assigneeLog = [];
+          logs = quotation.assignee_log
+            ? JSON.parse(quotation.assignee_log)
+            : [];
+
+          if (!Array.isArray(logs)) {
+            logs = [];
           }
-        } catch (e) {
-          assigneeLog = [];
+        } catch {
+          logs = [];
         }
 
-        // ✅ Push new log entry WITH description
-        assigneeLog.push({
+        // find previous assignee from last history
+        const previousAssignee =
+          logs.length > 0 ? logs[logs.length - 1].new_assignee : "";
+
+        logs.push({
           previous_assignee: previousAssignee,
-          new_assignee: assignee || "",
+
+          new_assignee: assignee,
+
           changed_by: updatedBy,
+
           changed_at: new Date().toISOString(),
-          description: description || "", // ✅ NEW FIELD
         });
 
-        const updatedLog = JSON.stringify(assigneeLog);
-
-        // Update all other quotations for this lead (without log)
+        // REMOVE assignee update
         await db.promise().query(
-          `UPDATE quotation SET 
-            assignee = ?,
-            updated_by = ?,
-            updated_at = CURRENT_TIMESTAMP
-           WHERE lead_id = ? AND id != ?`,
-          [assignee || null, updatedBy, lead_id, latestQuotation.id]
-        );
+          `UPDATE quotation
+           SET updated_by=?,
+               updated_at=CURRENT_TIMESTAMP,
+               assignee_log=?
+           WHERE id=?`,
 
-        // Update latest quotation with log
-        await db.promise().query(
-          `UPDATE quotation SET 
-            assignee = ?,
-            updated_by = ?,
-            updated_at = CURRENT_TIMESTAMP,
-            assignee_log = ?
-           WHERE id = ?`,
-          [assignee || null, updatedBy, updatedLog, latestQuotation.id]
+          [updatedBy, JSON.stringify(logs), quotationId],
         );
-
       } else {
-        // No quotation — fetch lead info and create minimal quotation with log
-        const [leadRow] = await db.promise().query(
-          "SELECT company_name, customer_name, reference FROM lead WHERE lead_id = ?",
-          [lead_id]
+        const [leadData] = await db.promise().query(
+          `SELECT company_name,
+                    customer_name,
+                    reference
+             FROM lead
+             WHERE lead_id=?`,
+
+          [lead_id],
         );
 
-        if (!leadRow || leadRow.length === 0) {
-          return res
-            .status(404)
-            .json({ success: false, message: "Lead not found" });
+        if (!leadData.length) {
+          return res.status(404).json({
+            success: false,
+            message: "Lead not found",
+          });
         }
 
-        const lead = leadRow[0];
+        const lead = leadData[0];
 
-        // ✅ Initial log WITH description
         const initialLog = JSON.stringify([
           {
             previous_assignee: "",
-            new_assignee: assignee || "",
+            new_assignee: assignee,
             changed_by: updatedBy,
             changed_at: new Date().toISOString(),
-            description: description || "", // ✅ NEW FIELD
           },
         ]);
 
-        await db.promise().query(
-          `INSERT INTO quotation 
-           (lead_id, company_name, customer_name, reference, quotation_status, assignee, updated_by, updated_at, assignee_log)
-           VALUES (?, ?, ?, ?, 'Pending', ?, ?, CURRENT_TIMESTAMP, ?)`,
+        const [insertResult] = await db.promise().query(
+          `INSERT INTO quotation
+            (
+              lead_id,
+              company_name,
+              customer_name,
+              reference,
+              quotation_status,
+              updated_by,
+              assignee_log
+            )
+            VALUES
+            (?, ?, ?, ?, 'Pending', ?, ?)`,
+
           [
             lead_id,
-            lead.company_name || null,
-            lead.customer_name || null,
-            lead.reference || null,
-            assignee || null,
+            lead.company_name,
+            lead.customer_name,
+            lead.reference,
             updatedBy,
             initialLog,
-          ]
+          ],
         );
+
+        quotationId = insertResult.insertId;
       }
 
-      // Activity log
-      try {
-        const activityMsg = `${updatedBy} assigned "${assignee}" on lead #${lead_id}`;
-        await db.promise().query(
-          "INSERT INTO activities (message, user_name) VALUES (?, ?)",
-          [activityMsg, updatedBy]
-        );
-      } catch (activityErr) {
-        console.log("Activity Log Error:", activityErr.message);
+      // STORE FILES
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          await db.promise().query(
+            `INSERT INTO quotation_assignee_files
+            (
+              quotation_id,
+              filename,
+              filepath,
+              description,
+              public_id
+            )
+            VALUES
+            (?, ?, ?, ?, ?)`,
+
+            [
+              quotationId,
+              file.originalname,
+              file.path,
+              description || null,
+              file.filename || file.public_id || null,
+            ],
+          );
+        }
       }
 
       res.json({
         success: true,
-        message: "Assignee updated successfully for all quotations of this lead",
-        updated_by: updatedBy,
-        assignee,
-        lead_id,
+
+        message: "History stored successfully",
+
+        assignee_history: logs,
       });
     } catch (err) {
-      console.log("UPDATE ASSIGNEE ERROR:", err);
-      res.status(500).json({ success: false, message: err.message });
+      console.log(err);
+
+      res.status(500).json({
+        success: false,
+
+        message: err.message,
+      });
     }
-  }
+  },
 );
+
 
 // =============================
 // UPDATE STATUS
