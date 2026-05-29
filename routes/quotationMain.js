@@ -252,6 +252,10 @@ router.post(
   "/insert",
   authenticateAndAuthorize(),
   upload.array("files", 5),
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
   async (req, res) => {
     try {
       const {
@@ -274,10 +278,7 @@ router.post(
       } = req.body;
 
       const updatedBy =
-        req.user?.username ||
-        req.user?.name ||
-        req.user?.email ||
-        "Unknown";
+        req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
@@ -320,7 +321,7 @@ router.post(
           description || null,
           activity_type || null,
           updatedBy,
-        ]
+        ],
       );
 
       const quotationId = result.insertId;
@@ -337,7 +338,11 @@ router.post(
           `INSERT INTO quotation_followup_files 
           (quot_follow_up_id, file_name, file_path, public_id)
           VALUES ?`,
+<<<<<<< Updated upstream
           [fileValues]
+=======
+          [fileValues],
+>>>>>>> Stashed changes
         );
       }
 
@@ -350,10 +355,12 @@ router.post(
 
         const activityMsg = `${userName} created quotation ${quotation_no}`;
 
-        await db.promise().query(
-          "INSERT INTO activities (message, user_name) VALUES (?, ?)",
-          [activityMsg, userName]
-        );
+        await db
+          .promise()
+          .query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [
+            activityMsg,
+            userName,
+          ]);
       } catch (activityErr) {
         console.log("Activity Log Error:", activityErr.message);
       }
@@ -371,7 +378,7 @@ router.post(
         message: err.message || "Something went wrong",
       });
     }
-  }
+  },
 );
 
 // =============================
