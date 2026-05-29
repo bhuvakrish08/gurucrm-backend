@@ -38,7 +38,6 @@ const upload = multer({
 // =============================
 // READ ALL QUOTATIONS
 // =============================
-
 router.get("/read", authenticateAndAuthorize(), async (req, res) => {
   try {
     let loggedInFullName = "";
@@ -64,6 +63,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.customer_name, 
           l.reference, 
           l.status as lead_status,
+          l.source,
           q.id as latest_quotation_id,
           q.quotation_no,
           q.quotation_date,
@@ -79,6 +79,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.follow_up_date,
           q.updated_by,
           q.updated_at,
+          q.source,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved
@@ -116,7 +117,8 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.lead_id, 
           l.company_name, 
           l.customer_name, 
-          l.reference, 
+          l.reference,
+          l.source, 
           l.status as lead_status,
           q.id as latest_quotation_id,
           q.quotation_no,
@@ -133,6 +135,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.follow_up_date,
           q.updated_by,
           q.updated_at,
+          q.source,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved
@@ -177,6 +180,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
     }
 
     res.json({ success: true, result: rows });
+    console.log(rows)
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
