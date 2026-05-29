@@ -77,17 +77,19 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
         customer_name,
         quotation_no,
         assignee,
+        source,
         total,
         proforma_percentage,
         status
       )
-      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         pi_no,
         q.id,
         q.customer_name,
         q.quotation_no,
         q.assignee,
+        q.source,
         amount,
         newPercentage,
         "partial",
@@ -216,6 +218,7 @@ router.get("/list", async (req, res) => {
         q.customer_name,
         q.quotation_no,
         q.assignee,
+        q.source,
         q.grand_total,
         q.proforma_percentage,
         q.quotation_status,
@@ -253,6 +256,7 @@ router.get("/list", async (req, res) => {
       count: result.length,
       data: result,
     });
+    console.log(result)
 
   } catch (err) {
     console.error(err);
