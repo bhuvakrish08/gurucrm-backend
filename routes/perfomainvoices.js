@@ -98,6 +98,7 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
 
     const pi_id = piResult.insertId;
 
+
     // ==========================================
     // INSERT FOLLOWUP
     // ==========================================
@@ -124,6 +125,8 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
       success: true,
       message: "PI Created Successfully",
     });
+
+
   } catch (err) {
     console.log(err);
 
@@ -256,7 +259,7 @@ router.get("/list", async (req, res) => {
       count: result.length,
       data: result,
     });
-    console.log(result)
+     console.log(result)
 
   } catch (err) {
     console.error(err);

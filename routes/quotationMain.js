@@ -180,7 +180,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
     }
 
     res.json({ success: true, result: rows });
-    console.log(rows)
+    
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -276,6 +276,32 @@ router.post(
       const updatedBy =
         req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
+      // ✅ Lead માંથી source fetch કરો
+      let leadSource = null;
+      if (lead_id) {
+        const [leadRow] = await db.promise().query(
+          "SELECT source FROM lead WHERE lead_id = ?",
+          [lead_id]
+        );
+        if (leadRow.length > 0) {
+          leadSource = leadRow[0].source;
+        }
+      }
+
+      // ✅ Quotation No already exists check
+      if (quotation_no) {
+        const [existing] = await db.promise().query(
+          "SELECT id FROM quotation WHERE quotation_no = ?",
+          [quotation_no]
+        );
+        if (existing.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Quotation No "${quotation_no}" already exists`,
+          });
+        }
+      }
+
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -283,6 +309,7 @@ router.post(
           company_name,
           customer_name,
           reference,
+          source,
           quotation_status,
           follow_up_date,
           quotation_no,
@@ -298,12 +325,13 @@ router.post(
           updated_by,
           updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
+          leadSource,            // ✅ Lead માંથી આવે છે
           quotation_status || "Pending",
           follow_up_date || null,
           quotation_no || null,
@@ -317,11 +345,12 @@ router.post(
           description || null,
           activity_type || null,
           updatedBy,
-        ],
+        ]
       );
 
       const quotationId = result.insertId;
 
+      // ✅ Files save કરો
       if (req.files && req.files.length > 0) {
         const fileValues = req.files.map((f) => [
           quotationId,
@@ -334,10 +363,11 @@ router.post(
           `INSERT INTO quotation_followup_files 
           (quot_follow_up_id, file_name, file_path, public_id)
           VALUES ?`,
-          [fileValues],
+          [fileValues]
         );
       }
 
+      // ✅ Activity log
       try {
         const userName =
           req.user?.username ||
@@ -347,12 +377,10 @@ router.post(
 
         const activityMsg = `${userName} created quotation ${quotation_no}`;
 
-        await db
-          .promise()
-          .query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [
-            activityMsg,
-            userName,
-          ]);
+        await db.promise().query(
+          "INSERT INTO activities (message, user_name) VALUES (?, ?)",
+          [activityMsg, userName]
+        );
       } catch (activityErr) {
         console.log("Activity Log Error:", activityErr.message);
       }
@@ -363,6 +391,7 @@ router.post(
         quotationId,
         updated_by: updatedBy,
       });
+
     } catch (err) {
       console.log("INSERT QUOTATION ERROR:", err);
       return res.status(500).json({
@@ -370,7 +399,7 @@ router.post(
         message: err.message || "Something went wrong",
       });
     }
-  },
+  }
 );
 
 // =============================
@@ -871,28 +900,30 @@ router.delete("/:id", async (req, res) => {
 // UPDATE MAIN STATUS
 // =============================
 
-
-
-
-
 router.put("/update-main-status/:id", async (req, res) => {
   try {
-    await db
-      .promise()
-      .query("UPDATE quotation SET quotation_status = 'Won' WHERE id = ?", [
-        req.params.id,
-      ]);
+    // lead source લો
+    const [qRow] = await db.promise().query(
+      `SELECT q.lead_id, l.source 
+       FROM quotation q
+       LEFT JOIN lead l ON l.lead_id = q.lead_id
+       WHERE q.id = ?`,
+      [req.params.id]
+    );
 
-    res.json({
-      success: true,
-      message: "Main quotation status updated successfully",
-    });
+    const leadSource = qRow[0]?.source || null;
+
+    // source પણ update કરો
+    await db.promise().query(
+      `UPDATE quotation 
+       SET quotation_status = 'Won', source = ? 
+       WHERE id = ?`,
+      [leadSource, req.params.id]
+    );
+
+    res.json({ success: true, message: "Status updated successfully" });
   } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
