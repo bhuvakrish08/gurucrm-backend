@@ -38,6 +38,7 @@ const upload = multer({
 // =============================
 // READ ALL QUOTATIONS
 // =============================
+
 router.get("/read", authenticateAndAuthorize(), async (req, res) => {
   try {
     let loggedInFullName = "";
@@ -51,7 +52,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
       loggedInFullName || req.user?.username || req.user?.name || req.user?.email || "";
 
     const userRole = req.user?.role;
-    const isAdminOrSuper = ["Admin", "Super Admin"].includes(userRole);
+    const isAdminOrSuper = ["Admin", "Super Admin", "Sales", "Estimation", "Leads Management"].includes(userRole);
 
     let rows;
 
@@ -62,8 +63,9 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.company_name, 
           l.customer_name, 
           l.reference, 
+          COALESCE(ls.name, l.source) AS source,
+          l.assignee AS lead_assignee,
           l.status as lead_status,
-          l.source,
           q.id as latest_quotation_id,
           q.quotation_no,
           q.quotation_date,
@@ -76,14 +78,15 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.description,
           q.proforma_percentage,
           q.assignee,
+          q.assignee_log,
           q.follow_up_date,
           q.updated_by,
           q.updated_at,
-          q.source,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved
         FROM lead l
+        LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
         LEFT JOIN (
           SELECT q1.*
           FROM quotation q1
@@ -117,8 +120,9 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.lead_id, 
           l.company_name, 
           l.customer_name, 
-          l.reference,
-          l.source, 
+          l.reference, 
+          COALESCE(ls.name, l.source) AS source,
+          l.assignee AS lead_assignee,
           l.status as lead_status,
           q.id as latest_quotation_id,
           q.quotation_no,
@@ -132,14 +136,15 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.description,
           q.proforma_percentage,
           q.assignee,
+          q.assignee_log,
           q.follow_up_date,
           q.updated_by,
           q.updated_at,
-          q.source,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved
         FROM lead l
+        LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
         LEFT JOIN (
           SELECT q1.*
           FROM quotation q1
@@ -180,7 +185,10 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
     }
 
     res.json({ success: true, result: rows });
+<<<<<<< Updated upstream
     
+=======
+>>>>>>> Stashed changes
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -274,7 +282,54 @@ router.post(
       } = req.body;
 
       const updatedBy =
-        req.user?.username || req.user?.name || req.user?.email || "Unknown";
+        req.user?.username ||
+        req.user?.name ||
+        req.user?.email ||
+        "Unknown";
+
+      // Get lead's source
+      let source = null;
+      if (lead_id) {
+        const [leadRows] = await db.promise().query(
+          `SELECT COALESCE(ls.name, l.source) AS source 
+           FROM lead l 
+           LEFT JOIN inquiry_lead_source ls ON ls.id = l.source 
+           WHERE l.lead_id = ?`,
+          [lead_id]
+        );
+        if (leadRows.length > 0) {
+          source = leadRows[0].source;
+        }
+      }
+
+      // Safe Numeric Parser
+      const parseNum = (val) => {
+        if (val === undefined || val === null || val === '') return null;
+        const cleanStr = String(val).replace(/[^0-9.-]/g, "");
+        const num = parseFloat(cleanStr);
+        return isNaN(num) ? null : num;
+      };
+
+      // Safe Date Parser
+      const parseDate = (val) => {
+        if (!val || val === '' || val === 'null' || val === 'undefined') return null;
+        if (typeof val === 'string' && val.includes('-')) {
+          const parts = val.split('-');
+          if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
+            return `${parts[2]}-${parts[1]}-${parts[0]}`;
+          }
+        }
+        return val;
+      };
+
+      const parsedRate = parseNum(rate);
+      const parsedDiscount = parseNum(discount);
+      const parsedTax = parseNum(tax);
+      const parsedAmount = parseNum(amount);
+      const parsedGrandTotal = parseNum(grand_total);
+
+      const parsedFollowUpDate = parseDate(follow_up_date);
+      const parsedQuotationDate = parseDate(quotation_date);
 
       // ✅ Lead માંથી source fetch કરો
       let leadSource = null;
@@ -325,23 +380,31 @@ router.post(
           updated_by,
           updated_at
          )
+<<<<<<< Updated upstream
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+=======
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+>>>>>>> Stashed changes
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
+<<<<<<< Updated upstream
           leadSource,            // ✅ Lead માંથી આવે છે
+=======
+          source || null,
+>>>>>>> Stashed changes
           quotation_status || "Pending",
-          follow_up_date || null,
+          parsedFollowUpDate,
           quotation_no || null,
-          quotation_date || null,
-          grand_total || null,
+          parsedQuotationDate,
+          parsedGrandTotal,
           assignee || null,
-          rate || null,
-          discount || null,
-          tax || null,
-          amount || null,
+          parsedRate,
+          parsedDiscount,
+          parsedTax,
+          parsedAmount,
           description || null,
           activity_type || null,
           updatedBy,
@@ -397,6 +460,9 @@ router.post(
       return res.status(500).json({
         success: false,
         message: err.message || "Something went wrong",
+        sqlMessage: err.sqlMessage,
+        code: err.code,
+        stack: err.stack,
       });
     }
   }
@@ -436,6 +502,8 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         l.company_name, 
         l.customer_name, 
         l.reference, 
+        COALESCE(ls.name, l.source) AS source,
+        l.assignee AS lead_assignee,
         l.status as lead_status,
         q.id as latest_quotation_id,
         q.quotation_no,
@@ -455,6 +523,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         q_first.first_quotation_date,
         IF(q_approved.approved_count > 0, 1, 0) AS has_approved
       FROM lead l
+      LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
       LEFT JOIN (
         SELECT q1.*
         FROM quotation q1
@@ -556,6 +625,30 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
       req.user?.email ||
       "Unknown";
 
+    const parseNum = (val) => {
+      if (val === undefined || val === null || val === '') return null;
+      const cleanStr = String(val).replace(/[^0-9.-]/g, "");
+      const num = parseFloat(cleanStr);
+      return isNaN(num) ? null : num;
+    };
+
+    const parseDate = (val) => {
+      if (!val || val === '' || val === 'null' || val === 'undefined') return null;
+      if (typeof val === 'string' && val.includes('-')) {
+        const parts = val.split('-');
+        if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
+          return `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+      }
+      return val;
+    };
+
+    const parsedAmount = parseNum(amount);
+    const parsedDiscount = parseNum(discount);
+    const parsedTax = parseNum(tax);
+    const parsedGrandTotal = parseNum(grand_total);
+    const parsedQuotationDate = parseDate(quotation_date);
+
     await db.promise().query(
       `UPDATE quotation SET 
         quotation_no = ?, 
@@ -572,12 +665,12 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
        WHERE id = ?`,
       [
         quotation_no || null,
-        quotation_date || null,
+        parsedQuotationDate,
         activity_type || null,
-        amount || null,
-        discount || null,
-        tax || null,
-        grand_total || null,
+        parsedAmount,
+        parsedDiscount,
+        parsedTax,
+        parsedGrandTotal,
         description || null,
         assignee || null,
         updatedBy,
@@ -640,7 +733,8 @@ router.put(
       const [quotationRows] = await db.promise().query(
         `SELECT id,
                   assignee,
-                  assignee_log
+                  assignee_log,
+                  quotation_status
            FROM quotation
            WHERE lead_id = ?
            ORDER BY id DESC
@@ -656,6 +750,8 @@ router.put(
         const quotation = quotationRows[0];
 
         quotationId = quotation.id;
+        const currentStatus = quotation.quotation_status || "Pending";
+        const nextStatus = currentStatus === "Sent" ? "Revision" : currentStatus;
 
         try {
           logs = quotation.assignee_log
@@ -683,23 +779,33 @@ router.put(
           changed_at: new Date().toISOString(),
         });
 
-        // REMOVE assignee update
+        // Update quotation's assignee, updated_by, assignee_log, and quotation_status columns
         await db.promise().query(
           `UPDATE quotation
-           SET updated_by=?,
+           SET assignee=?,
+               updated_by=?,
                updated_at=CURRENT_TIMESTAMP,
-               assignee_log=?
+               assignee_log=?,
+               quotation_status=?
            WHERE id=?`,
 
-          [updatedBy, JSON.stringify(logs), quotationId],
+          [assignee, updatedBy, JSON.stringify(logs), nextStatus, quotationId],
+        );
+
+        // Also update lead's assignee
+        await db.promise().query(
+          "UPDATE `lead` SET assignee=? WHERE lead_id=?",
+          [assignee, lead_id]
         );
       } else {
         const [leadData] = await db.promise().query(
-          `SELECT company_name,
-                    customer_name,
-                    reference
-             FROM lead
-             WHERE lead_id=?`,
+          `SELECT l.company_name,
+                  l.customer_name,
+                  l.reference,
+                  COALESCE(ls.name, l.source) AS source
+           FROM lead l
+           LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
+           WHERE l.lead_id=?`,
 
           [lead_id],
         );
@@ -729,24 +835,34 @@ router.put(
               company_name,
               customer_name,
               reference,
+              source,
               quotation_status,
+              assignee,
               updated_by,
               assignee_log
             )
             VALUES
-            (?, ?, ?, ?, 'Pending', ?, ?)`,
+            (?, ?, ?, ?, ?, 'Pending', ?, ?, ?)`,
 
           [
             lead_id,
             lead.company_name,
             lead.customer_name,
             lead.reference,
+            lead.source || null,
+            assignee,
             updatedBy,
             initialLog,
           ],
         );
 
         quotationId = insertResult.insertId;
+
+        // Also update lead's assignee
+        await db.promise().query(
+          "UPDATE `lead` SET assignee=? WHERE lead_id=?",
+          [assignee, lead_id]
+        );
       }
 
       // STORE FILES
@@ -795,32 +911,146 @@ router.put(
 );
 
 
-// =============================
-// UPDATE STATUS
-// =============================
-
-router.put("/update-status/:id", async (req, res) => {
+router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
     const { quotation_status } = req.body;
+    const updatedBy =
+      req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
     if (quotation_status === "Approved") {
+      // Find quotation details
       const [qRow] = await db
         .promise()
-        .query("SELECT lead_id FROM quotation WHERE id = ?", [req.params.id]);
-      const leadId = qRow[0]?.lead_id;
-
-      if (leadId) {
-        await db.promise().query(
-          "UPDATE quotation SET quotation_status = 'Declined' WHERE lead_id = ? AND id != ?",
-          [leadId, req.params.id]
+        .query(
+          "SELECT lead_id, assignee, customer_name, quotation_no, grand_total, assignee_log FROM quotation WHERE id = ?",
+          [req.params.id]
         );
+      
+      if (qRow.length > 0) {
+        const leadId = qRow[0].lead_id;
+        const currentAssignee = qRow[0].assignee || "";
+        const customerName = qRow[0].customer_name || null;
+        const quotationNo = qRow[0].quotation_no || 0;
+        const grandTotal = qRow[0].grand_total || 0;
+
+        // Decline other quotations for this lead
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE quotation SET quotation_status = 'Declined' WHERE lead_id = ? AND id != ?",
+            [leadId, req.params.id]
+          );
+        }
+
+        // Find or assign user with Proforma invoices role
+        let piUser = req.body.assigned_pi_user;
+        if (piUser) {
+          piUser = piUser.split(" ")[0];
+        } else {
+          const [piUsers] = await db.promise().query(
+            "SELECT name FROM users WHERE role = 'Proforma invoices' LIMIT 1"
+          );
+          piUser = piUsers.length > 0 ? (piUsers[0].name ? piUsers[0].name.split(" ")[0] : "Vruta") : "Vruta";
+        }
+
+        // Parse assignee log
+        let logs = [];
+        try {
+          logs = qRow[0].assignee_log ? JSON.parse(qRow[0].assignee_log) : [];
+          if (!Array.isArray(logs)) logs = [];
+        } catch {
+          logs = [];
+        }
+
+        logs.push({
+          previous_assignee: currentAssignee,
+          new_assignee: piUser,
+          changed_by: updatedBy,
+          changed_at: new Date().toISOString(),
+        });
+
+        // Update quotation's assignee, assignee_log, status to Approved
+        await db.promise().query(
+          "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = 'Approved' WHERE id = ?",
+          [piUser, JSON.stringify(logs), req.params.id]
+        );
+
+        // Create Proforma Invoice automatically if not exists
+        const [existingPI] = await db.promise().query(
+          "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
+          [req.params.id]
+        );
+
+        if (existingPI.length === 0) {
+          const piNo = `PI-${quotationNo}`;
+          await db.promise().query(
+            `INSERT INTO proforma_invoices 
+             (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, total, proforma_percentage, status)
+             VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, 0.00, 'draft')`,
+            [req.params.id, piNo, customerName, quotationNo, piUser, grandTotal]
+          );
+        }
+
+        // Update lead status to Won and assignee to piUser
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE `lead` SET status = 'Won', assignee = ? WHERE lead_id = ?",
+            [piUser, leadId]
+          );
+        }
       }
+    } else if (quotation_status === "Revision") {
+      // Find lead_id and current assignee of the quotation
+      const [qRows] = await db.promise().query(
+        "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
+        [req.params.id]
+      );
+      if (qRows.length > 0) {
+        const leadId = qRows[0].lead_id;
+        const currentAssignee = qRows[0].assignee || "";
+
+        // Find user with Estimation role
+        const [estUsers] = await db.promise().query(
+          "SELECT name FROM users WHERE role = 'Estimation' LIMIT 1"
+        );
+        const estUser = estUsers.length > 0 ? estUsers[0].name : "Khushali";
+
+        // Parse assignee log
+        let logs = [];
+        try {
+          logs = qRows[0].assignee_log ? JSON.parse(qRows[0].assignee_log) : [];
+          if (!Array.isArray(logs)) logs = [];
+        } catch {
+          logs = [];
+        }
+
+        logs.push({
+          previous_assignee: currentAssignee,
+          new_assignee: estUser,
+          changed_by: updatedBy,
+          changed_at: new Date().toISOString(),
+        });
+
+        // Update quotation's assignee and assignee_log
+        await db.promise().query(
+          "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ? WHERE id = ?",
+          [estUser, JSON.stringify(logs), quotation_status, req.params.id]
+        );
+
+        // Also update lead's assignee
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE `lead` SET assignee = ? WHERE lead_id = ?",
+            [estUser, leadId]
+          );
+        }
+      }
+    } else {
+      await db.promise().query(
+        "UPDATE quotation SET quotation_status = ? WHERE id = ?",
+        [quotation_status, req.params.id]
+      );
     }
 
-    await db.promise().query(
-      "UPDATE quotation SET quotation_status = ? WHERE id = ?",
-      [quotation_status, req.params.id]
-    );
     res.json({ success: true, message: "Status updated successfully" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -926,84 +1156,5 @@ router.put("/update-main-status/:id", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
-
-// GET COMPLETE QUOTATION DETAILS
-// =====================================
-
-router.get(
-  "/full-details/:quotation_id",
-  authenticateAndAuthorize(),
-  async (req, res) => {
-    try {
-      const quotation_id = req.params.quotation_id;
-
-      const [rows] = await db.promise().query(
-        `
-        SELECT
-          q.id,
-          q.lead_id,
-          q.company_name,
-          q.customer_name,
-          q.reference,
-          q.source,
-          q.quotation_status,
-          q.follow_up_date,
-          q.quotation_no,
-          q.quotation_date,
-          q.grand_total,
-          q.assignee,
-          q.rate,
-          q.discount,
-          q.tax,
-          q.amount,
-          q.description,
-          q.activity_type,
-          q.proforma_percentage,
-          q.updated_by,
-          q.updated_at,
-          q.created_at,
-
-          l.status as lead_status,
-          l.assignee as lead_assignee,
-
-          (
-            SELECT COUNT(*)
-            FROM quotation q2
-            WHERE q2.lead_id = q.lead_id
-          ) as total_quotations
-
-        FROM quotation q
-
-        LEFT JOIN lead l
-        ON l.lead_id = q.lead_id
-
-        WHERE q.id = ?
-        `,
-        [quotation_id]
-      );
-
-      if (!rows.length) {
-        return res.status(404).json({
-          success: false,
-          message: "Quotation not found",
-        });
-      }
-
-      res.json({
-        success: true,
-        data: rows[0],
-      });
-
-    } catch (err) {
-      console.log(err);
-
-      res.status(500).json({
-        success: false,
-        message: err.message,
-      });
-    }
-  }
-);
 
 module.exports = router;

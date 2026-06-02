@@ -77,19 +77,17 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
         customer_name,
         quotation_no,
         assignee,
-        source,
         total,
         proforma_percentage,
         status
       )
-      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)`,
       [
         pi_no,
         q.id,
         q.customer_name,
         q.quotation_no,
         q.assignee,
-        q.source,
         amount,
         newPercentage,
         "partial",
@@ -210,48 +208,36 @@ router.post("/add-followup/:pi_id", async (req, res) => {
 // ============================================================
 router.get("/list", async (req, res) => {
   try {
-
-    const [data] = await db.promise().query(`
-      SELECT
-        q.id AS quotation_id,
-        q.lead_id,
-        q.company_name,
-        q.customer_name,
-        q.quotation_no,
-        q.assignee,
-        q.source,
-        q.grand_total,
-        q.proforma_percentage,
-        q.quotation_status,
-
+    const [piData] = await db.promise().query(`
+      SELECT 
         pi.pi_id,
         pi.pi_no,
         pi.pi_date,
+        pi.customer_name,
+        pi.quotation_no,
+        pi.assignee,
         pi.total,
+        pi.proforma_percentage,
         pi.status,
-        pi.created_at
-
-      FROM quotation q
-
-      LEFT JOIN proforma_invoices pi
-        ON pi.quotation_id = q.id
-
-      WHERE q.quotation_status IN ('Won','Approved')
-
-      ORDER BY q.id DESC
+        pi.created_at,
+        q.company_name,
+        q.lead_id,
+        q.grand_total AS quotation_grand_total
+      FROM proforma_invoices pi
+      LEFT JOIN quotation q ON q.id = pi.quotation_id
+      ORDER BY pi.pi_id DESC
     `);
 
     const [followUps] = await db.promise().query(
       `SELECT * FROM pi_follow_up ORDER BY id DESC`
     );
 
-    const result = data.map((row) => ({
-      ...row,
-      follow_ups: row.pi_id
-        ? followUps.filter((f) => f.pi_id === row.pi_id)
-        : [],
+    const result = piData.map((pi) => ({
+      ...pi,
+      follow_ups: followUps.filter((f) => f.pi_id === pi.pi_id),
     }));
 
+<<<<<<< Updated upstream
     res.json({
       success: true,
       count: result.length,
@@ -259,12 +245,12 @@ router.get("/list", async (req, res) => {
     });
      console.log(result)
 
+=======
+    res.json({ success: true, count: result.length, data: result });
+>>>>>>> Stashed changes
   } catch (err) {
     console.error(err);
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 });
 
