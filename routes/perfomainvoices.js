@@ -96,7 +96,6 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
 
     const pi_id = piResult.insertId;
 
-
     // ==========================================
     // INSERT FOLLOWUP
     // ==========================================
@@ -123,8 +122,6 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
       success: true,
       message: "PI Created Successfully",
     });
-
-
   } catch (err) {
     console.log(err);
 
@@ -138,14 +135,13 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
 // ============================================================
 // ADD FOLLOW-UP TO PI
 // ============================================================
-// routes/pi.js — add-followup route
 router.post("/add-followup/:pi_id", async (req, res) => {
   const { pi_id } = req.params;
   const { percentage } = req.body;
 
   try {
     const [piData] = await db.promise().query(
-      `SELECT pi_id, quotation_id, proforma_percentage FROM proforma_invoices WHERE pi_id = ?`,
+      `SELECT pi_id, quotation_id FROM proforma_invoices WHERE pi_id = ?`,
       [pi_id]
     );
 
@@ -155,54 +151,57 @@ router.post("/add-followup/:pi_id", async (req, res) => {
 
     const pi = piData[0];
 
-    // ✅ USE proforma_invoices.proforma_percentage — single source of truth
-    const currentPercentage = Number(pi.proforma_percentage || 0);
-    const newPercentage = Number(percentage);
-
-    if (currentPercentage + newPercentage > 100) {
-      return res.status(400).json({
-        message: `Only ${100 - currentPercentage}% remaining`
-      });
-    }
-
     const [quoteData] = await db.promise().query(
       `SELECT grand_total FROM quotation WHERE id = ?`,
       [pi.quotation_id]
     );
 
     const grand_total = quoteData[0].grand_total;
-    const amount = (grand_total * newPercentage) / 100;
+
+    const [current] = await db.promise().query(
+      `SELECT SUM(proforma_percentage) as total_percentage FROM pi_follow_up WHERE pi_id = ?`,
+      [pi_id]
+    );
+
+    const currentPercentage = current[0].total_percentage || 0;
+
+    if (currentPercentage + percentage > 100) {
+      return res.status(400).json({ message: "Total percentage cannot exceed 100%" });
+    }
+
+    const amount = (grand_total * percentage) / 100;
 
     await db.promise().query(
       `INSERT INTO pi_follow_up (pi_id, proforma_percentage, total) VALUES (?, ?, ?)`,
-      [pi_id, newPercentage, amount]
+      [pi_id, percentage, amount]
     );
 
-    const newTotalPercentage = currentPercentage + newPercentage;
-    const newTotalAmount = (grand_total * newTotalPercentage) / 100;
+    const [totals] = await db.promise().query(
+      `SELECT SUM(proforma_percentage) as total_percentage, SUM(total) as total_amount
+       FROM pi_follow_up WHERE pi_id = ?`,
+      [pi_id]
+    );
+
+    const total_percentage = totals[0].total_percentage || 0;
+    const total_amount = totals[0].total_amount || 0;
 
     await db.promise().query(
       `UPDATE proforma_invoices SET proforma_percentage = ?, total = ? WHERE pi_id = ?`,
-      [newTotalPercentage, newTotalAmount, pi_id]
+      [total_percentage, total_amount, pi_id]
     );
 
     await db.promise().query(
       `UPDATE quotation SET proforma_percentage = ? WHERE id = ?`,
-      [newTotalPercentage, pi.quotation_id]
+      [total_percentage, pi.quotation_id]
     );
 
-    res.json({
-      success: true,
-      message: "Follow-up added",
-      total_percentage: newTotalPercentage,
-      total_amount: newTotalAmount
-    });
-
+    res.json({ success: true, message: "Follow-up added", total_percentage, total_amount });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
+
 // ============================================================
 // GET ALL PI WITH FOLLOW-UPS
 // ============================================================
@@ -237,17 +236,7 @@ router.get("/list", async (req, res) => {
       follow_ups: followUps.filter((f) => f.pi_id === pi.pi_id),
     }));
 
-<<<<<<< Updated upstream
-    res.json({
-      success: true,
-      count: result.length,
-      data: result,
-    });
-     console.log(result)
-
-=======
     res.json({ success: true, count: result.length, data: result });
->>>>>>> Stashed changes
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
