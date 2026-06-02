@@ -236,17 +236,7 @@ router.get("/list", async (req, res) => {
       follow_ups: followUps.filter((f) => f.pi_id === pi.pi_id),
     }));
 
-<<<<<<< Updated upstream
     res.json({ success: true, count: result.length, data: result });
-=======
-    res.json({
-      success: true,
-      count: result.length,
-      data: result,
-    });
-    console.log(result)
-
->>>>>>> Stashed changes
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

@@ -185,10 +185,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
     }
 
     res.json({ success: true, result: rows });
-<<<<<<< Updated upstream
-=======
     console.log(rows)
->>>>>>> Stashed changes
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -288,7 +285,6 @@ router.post(
         req.user?.email ||
         "Unknown";
 
-<<<<<<< Updated upstream
       // Get lead's source
       let source = null;
       if (lead_id) {
@@ -333,8 +329,6 @@ router.post(
       const parsedFollowUpDate = parseDate(follow_up_date);
       const parsedQuotationDate = parseDate(quotation_date);
 
-=======
->>>>>>> Stashed changes
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -357,20 +351,13 @@ router.post(
           updated_by,
           updated_at
          )
-<<<<<<< Updated upstream
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-=======
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
->>>>>>> Stashed changes
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
-<<<<<<< Updated upstream
           source || null,
-=======
->>>>>>> Stashed changes
           quotation_status || "Pending",
           parsedFollowUpDate,
           quotation_no || null,
@@ -1130,8 +1117,6 @@ router.put("/update-main-status/:id", async (req, res) => {
   }
 });
 
-<<<<<<< Updated upstream
-=======
 // =====================================
 // GET COMPLETE QUOTATION DETAILS
 // =====================================
@@ -1211,5 +1196,4 @@ router.get(
   }
 );
 
->>>>>>> Stashed changes
 module.exports = router;
