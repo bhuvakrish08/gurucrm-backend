@@ -183,8 +183,8 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
         [userName, userName, userName]
       );
     }
-
     res.json({ success: true, result: rows });
+  
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -724,21 +724,16 @@ router.put(
           logs = [];
         }
 
-        // find previous assignee from last history
         const previousAssignee =
           logs.length > 0 ? logs[logs.length - 1].new_assignee : "";
 
         logs.push({
           previous_assignee: previousAssignee,
-
           new_assignee: assignee,
-
           changed_by: updatedBy,
-
           changed_at: new Date().toISOString(),
         });
 
-        // Update quotation's assignee, updated_by, assignee_log, and quotation_status columns
         await db.promise().query(
           `UPDATE quotation
            SET assignee=?,
@@ -747,11 +742,9 @@ router.put(
                assignee_log=?,
                quotation_status=?
            WHERE id=?`,
-
           [assignee, updatedBy, JSON.stringify(logs), nextStatus, quotationId],
         );
 
-        // Also update lead's assignee
         await db.promise().query(
           "UPDATE `lead` SET assignee=? WHERE lead_id=?",
           [assignee, lead_id]
@@ -765,7 +758,6 @@ router.put(
            FROM lead l
            LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
            WHERE l.lead_id=?`,
-
           [lead_id],
         );
 
@@ -802,7 +794,6 @@ router.put(
             )
             VALUES
             (?, ?, ?, ?, ?, 'Pending', ?, ?, ?)`,
-
           [
             lead_id,
             lead.company_name,
@@ -817,14 +808,12 @@ router.put(
 
         quotationId = insertResult.insertId;
 
-        // Also update lead's assignee
         await db.promise().query(
           "UPDATE `lead` SET assignee=? WHERE lead_id=?",
           [assignee, lead_id]
         );
       }
 
-      // STORE FILES
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
           await db.promise().query(
@@ -838,7 +827,6 @@ router.put(
             )
             VALUES
             (?, ?, ?, ?, ?)`,
-
             [
               quotationId,
               file.originalname,
@@ -852,23 +840,23 @@ router.put(
 
       res.json({
         success: true,
-
         message: "History stored successfully",
-
         assignee_history: logs,
       });
     } catch (err) {
       console.log(err);
-
       res.status(500).json({
         success: false,
-
         message: err.message,
       });
     }
   },
 );
 
+// =============================
+// UPDATE STATUS
+// ✅ FIX: source pan quotation thi fetch kari PI ma insert karyo
+// =============================
 
 router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
@@ -877,20 +865,28 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
     if (quotation_status === "Approved") {
-      // Find quotation details
-      const [qRow] = await db
-        .promise()
-        .query(
-          "SELECT lead_id, assignee, customer_name, quotation_no, grand_total, assignee_log FROM quotation WHERE id = ?",
-          [req.params.id]
-        );
-      
+
+      // ✅ source pan fetch karo quotation ma thi
+      const [qRow] = await db.promise().query(
+        `SELECT 
+          lead_id, 
+          assignee, 
+          customer_name, 
+          quotation_no, 
+          grand_total, 
+          assignee_log,
+          source
+         FROM quotation WHERE id = ?`,
+        [req.params.id]
+      );
+
       if (qRow.length > 0) {
-        const leadId = qRow[0].lead_id;
+        const leadId          = qRow[0].lead_id;
         const currentAssignee = qRow[0].assignee || "";
-        const customerName = qRow[0].customer_name || null;
-        const quotationNo = qRow[0].quotation_no || 0;
-        const grandTotal = qRow[0].grand_total || 0;
+        const customerName    = qRow[0].customer_name || null;
+        const quotationNo     = qRow[0].quotation_no || null;  
+        const grandTotal      = qRow[0].grand_total || 0;
+        const source          = qRow[0].source || null;
 
         // Decline other quotations for this lead
         if (leadId) {
@@ -908,7 +904,9 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           const [piUsers] = await db.promise().query(
             "SELECT name FROM users WHERE role = 'Proforma invoices' LIMIT 1"
           );
-          piUser = piUsers.length > 0 ? (piUsers[0].name ? piUsers[0].name.split(" ")[0] : "Vruta") : "Vruta";
+          piUser = piUsers.length > 0
+            ? (piUsers[0].name ? piUsers[0].name.split(" ")[0] : "Vruta")
+            : "Vruta";
         }
 
         // Parse assignee log
@@ -927,25 +925,44 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           changed_at: new Date().toISOString(),
         });
 
-        // Update quotation's assignee, assignee_log, status to Approved
+        // Update quotation assignee, assignee_log, status to Approved
         await db.promise().query(
           "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = 'Approved' WHERE id = ?",
           [piUser, JSON.stringify(logs), req.params.id]
         );
 
-        // Create Proforma Invoice automatically if not exists
+        // ✅ PI create karo source sathe
         const [existingPI] = await db.promise().query(
           "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
           [req.params.id]
         );
 
         if (existingPI.length === 0) {
-          const piNo = `PI-${quotationNo}`;
+          const piNo = quotationNo ? `PI-${quotationNo}` : `PI-${Date.now()}`;  // ✅ null safe
           await db.promise().query(
             `INSERT INTO proforma_invoices 
-             (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, total, proforma_percentage, status)
-             VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, 0.00, 'draft')`,
-            [req.params.id, piNo, customerName, quotationNo, piUser, grandTotal]
+             (
+               quotation_id, 
+               pi_no, 
+               pi_date, 
+               customer_name, 
+               quotation_no, 
+               assignee, 
+               source,
+               total, 
+               proforma_percentage, 
+               status
+             )
+             VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, 0.00, 'draft')`,
+            [
+              req.params.id,
+              piNo,
+              customerName,
+              quotationNo,
+              piUser,
+              source,       // ✅ source insert thay che heve
+              grandTotal,
+            ]
           );
         }
 
@@ -957,23 +974,23 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           );
         }
       }
+
     } else if (quotation_status === "Revision") {
-      // Find lead_id and current assignee of the quotation
+
       const [qRows] = await db.promise().query(
         "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
         [req.params.id]
       );
+
       if (qRows.length > 0) {
         const leadId = qRows[0].lead_id;
         const currentAssignee = qRows[0].assignee || "";
 
-        // Find user with Estimation role
         const [estUsers] = await db.promise().query(
           "SELECT name FROM users WHERE role = 'Estimation' LIMIT 1"
         );
         const estUser = estUsers.length > 0 ? estUsers[0].name : "Khushali";
 
-        // Parse assignee log
         let logs = [];
         try {
           logs = qRows[0].assignee_log ? JSON.parse(qRows[0].assignee_log) : [];
@@ -989,13 +1006,11 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           changed_at: new Date().toISOString(),
         });
 
-        // Update quotation's assignee and assignee_log
         await db.promise().query(
           "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ? WHERE id = ?",
           [estUser, JSON.stringify(logs), quotation_status, req.params.id]
         );
 
-        // Also update lead's assignee
         if (leadId) {
           await db.promise().query(
             "UPDATE `lead` SET assignee = ? WHERE lead_id = ?",
@@ -1003,6 +1018,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           );
         }
       }
+
     } else {
       await db.promise().query(
         "UPDATE quotation SET quotation_status = ? WHERE id = ?",
@@ -1064,14 +1080,9 @@ router.delete("/:id", async (req, res) => {
       [req.params.id]
     );
 
-    await db
-      .promise()
-      .query("DELETE FROM quotation WHERE id = ?", [req.params.id]);
+    await db.promise().query("DELETE FROM quotation WHERE id = ?", [req.params.id]);
 
-    if (
-      deletedQuotation &&
-      deletedQuotation.quotation_status === "Approved"
-    ) {
+    if (deletedQuotation && deletedQuotation.quotation_status === "Approved") {
       await db.promise().query(
         "UPDATE quotation SET quotation_status = 'Pending' WHERE lead_id = ?",
         [deletedQuotation.lead_id]
@@ -1089,26 +1100,19 @@ router.delete("/:id", async (req, res) => {
 // UPDATE MAIN STATUS
 // =============================
 
-
-
 router.put("/update-main-status/:id", async (req, res) => {
   try {
-    await db
-      .promise()
-      .query("UPDATE quotation SET quotation_status = 'Won' WHERE id = ?", [
-        req.params.id,
-      ]);
-
+    await db.promise().query(
+      "UPDATE quotation SET quotation_status = 'Won' WHERE id = ?",
+      [req.params.id]
+    );
     res.json({
       success: true,
       message: "Main quotation status updated successfully",
     });
   } catch (err) {
     console.log(err);
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -1159,10 +1163,7 @@ router.get(
           ) as total_quotations
 
         FROM quotation q
-
-        LEFT JOIN lead l
-        ON l.lead_id = q.lead_id
-
+        LEFT JOIN lead l ON l.lead_id = q.lead_id
         WHERE q.id = ?
         `,
         [quotation_id]
@@ -1175,18 +1176,10 @@ router.get(
         });
       }
 
-      res.json({
-        success: true,
-        data: rows[0],
-      });
-
+      res.json({ success: true, data: rows[0] });
     } catch (err) {
       console.log(err);
-
-      res.status(500).json({
-        success: false,
-        message: err.message,
-      });
+      res.status(500).json({ success: false, message: err.message });
     }
   }
 );
