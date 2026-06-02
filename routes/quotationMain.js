@@ -218,30 +218,36 @@ router.get("/assignee-log/:lead_id", authenticateAndAuthorize(), async (req, res
 
     const [rows] = await db.promise().query(
       `SELECT assignee_log FROM quotation 
-       WHERE lead_id = ? 
-       ORDER BY id DESC 
-       LIMIT 1`,
+       WHERE lead_id = ?`,
       [lead_id]
     );
 
-    if (!rows || rows.length === 0) {
-      return res.json({ success: true, log: [] });
-    }
+    let combinedLog = [];
+    const seen = new Set();
 
-    let log = [];
-    try {
-      if (rows[0].assignee_log) {
-        log = JSON.parse(rows[0].assignee_log);
-        if (!Array.isArray(log)) log = [];
+    for (const row of rows) {
+      if (row.assignee_log) {
+        try {
+          const parsed = JSON.parse(row.assignee_log);
+          if (Array.isArray(parsed)) {
+            for (const entry of parsed) {
+              const uniqueKey = `${entry.changed_at}_${entry.new_assignee}`;
+              if (!seen.has(uniqueKey)) {
+                seen.add(uniqueKey);
+                combinedLog.push(entry);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore row parsing errors
+        }
       }
-    } catch (e) {
-      log = [];
     }
 
-    // Reverse — latest first
-    log.reverse();
+    // Sort descending (latest first)
+    combinedLog.sort((a, b) => new Date(b.changed_at) - new Date(a.changed_at));
 
-    res.json({ success: true, log });
+    res.json({ success: true, log: combinedLog });
   } catch (err) {
     console.log("GET ASSIGNEE LOG ERROR:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -327,6 +333,48 @@ router.post(
       const parsedFollowUpDate = parseDate(follow_up_date);
       const parsedQuotationDate = parseDate(quotation_date);
 
+      let assigneeLog = [];
+      if (lead_id) {
+        const [prevQuotation] = await db.promise().query(
+          `SELECT assignee_log, assignee FROM quotation
+           WHERE lead_id = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+          [lead_id]
+        );
+        if (prevQuotation.length > 0) {
+          try {
+            assigneeLog = prevQuotation[0].assignee_log ? JSON.parse(prevQuotation[0].assignee_log) : [];
+            if (!Array.isArray(assigneeLog)) assigneeLog = [];
+          } catch (e) {
+            assigneeLog = [];
+          }
+
+          const prevAssignee = prevQuotation[0].assignee || "";
+          if (assignee && assignee !== prevAssignee) {
+            assigneeLog.push({
+              previous_assignee: prevAssignee,
+              new_assignee: assignee,
+              changed_by: updatedBy,
+              changed_at: new Date().toISOString(),
+              description: "Assigned upon quotation creation",
+              files: []
+            });
+          }
+        } else {
+          if (assignee) {
+            assigneeLog.push({
+              previous_assignee: "",
+              new_assignee: assignee,
+              changed_by: updatedBy,
+              changed_at: new Date().toISOString(),
+              description: "Assigned upon quotation creation",
+              files: []
+            });
+          }
+        }
+      }
+
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -348,9 +396,10 @@ router.post(
           description,
           activity_type,
           updated_by,
+          assignee_log,
           updated_at
          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
         [
           lead_id || null,
           company_name || null,
@@ -370,6 +419,7 @@ router.post(
           description || null,
           activity_type || null,
           updatedBy,
+          assigneeLog.length > 0 ? JSON.stringify(assigneeLog) : null,
         ]
       );
 
@@ -712,16 +762,41 @@ router.put(
         const currentStatus = quotation.quotation_status || "Pending";
         const nextStatus = currentStatus === "Sent" ? "Revision" : currentStatus;
 
-        try {
-          logs = quotation.assignee_log
-            ? JSON.parse(quotation.assignee_log)
-            : [];
-
-          if (!Array.isArray(logs)) {
-            logs = [];
+        // Fetch and merge logs from ALL quotations for this lead to make sure we don't lose any past history!
+        const [allQuotations] = await db.promise().query(
+          `SELECT assignee_log FROM quotation WHERE lead_id = ?`,
+          [lead_id]
+        );
+        
+        const seen = new Set();
+        for (const qRow of allQuotations) {
+          if (qRow.assignee_log) {
+            try {
+              const parsed = JSON.parse(qRow.assignee_log);
+              if (Array.isArray(parsed)) {
+                for (const entry of parsed) {
+                  const uniqueKey = `${entry.changed_at}_${entry.new_assignee}`;
+                  if (!seen.has(uniqueKey)) {
+                    seen.add(uniqueKey);
+                    logs.push(entry);
+                  }
+                }
+              }
+            } catch (e) {}
           }
-        } catch {
-          logs = [];
+        }
+
+        // Sort existing logs chronologically ascending so we append at the end
+        logs.sort((a, b) => new Date(a.changed_at) - new Date(b.changed_at));
+
+        const uploadedFiles = [];
+        if (req.files && req.files.length > 0) {
+          for (const file of req.files) {
+            uploadedFiles.push({
+              file_name: file.originalname,
+              file_path: file.path,
+            });
+          }
         }
 
         const previousAssignee =
@@ -732,6 +807,8 @@ router.put(
           new_assignee: assignee,
           changed_by: updatedBy,
           changed_at: new Date().toISOString(),
+          description: description || null,
+          files: uploadedFiles,
         });
 
         await db.promise().query(
@@ -770,14 +847,29 @@ router.put(
 
         const lead = leadData[0];
 
-        const initialLog = JSON.stringify([
+        const uploadedFiles = [];
+        if (req.files && req.files.length > 0) {
+          for (const file of req.files) {
+            uploadedFiles.push({
+              file_name: file.originalname,
+              file_path: file.path,
+            });
+          }
+        }
+
+        const initialLogObj = [
           {
             previous_assignee: "",
             new_assignee: assignee,
             changed_by: updatedBy,
             changed_at: new Date().toISOString(),
+            description: description || null,
+            files: uploadedFiles,
           },
-        ]);
+        ];
+
+        logs = initialLogObj;
+        const initialLog = JSON.stringify(initialLogObj);
 
         const [insertResult] = await db.promise().query(
           `INSERT INTO quotation
@@ -923,6 +1015,8 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           new_assignee: piUser,
           changed_by: updatedBy,
           changed_at: new Date().toISOString(),
+          description: null,
+          files: [],
         });
 
         // Update quotation assignee, assignee_log, status to Approved
@@ -1004,6 +1098,8 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           new_assignee: estUser,
           changed_by: updatedBy,
           changed_at: new Date().toISOString(),
+          description: null,
+          files: [],
         });
 
         await db.promise().query(
