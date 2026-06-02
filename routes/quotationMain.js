@@ -185,6 +185,10 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
     }
 
     res.json({ success: true, result: rows });
+<<<<<<< Updated upstream
+=======
+    console.log(rows)
+>>>>>>> Stashed changes
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -256,6 +260,7 @@ router.post(
   "/insert",
   authenticateAndAuthorize(),
   upload.array("files", 5),
+
   async (req, res) => {
     try {
       const {
@@ -283,6 +288,7 @@ router.post(
         req.user?.email ||
         "Unknown";
 
+<<<<<<< Updated upstream
       // Get lead's source
       let source = null;
       if (lead_id) {
@@ -327,6 +333,8 @@ router.post(
       const parsedFollowUpDate = parseDate(follow_up_date);
       const parsedQuotationDate = parseDate(quotation_date);
 
+=======
+>>>>>>> Stashed changes
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -334,7 +342,6 @@ router.post(
           company_name,
           customer_name,
           reference,
-          source,
           quotation_status,
           follow_up_date,
           quotation_no,
@@ -350,13 +357,20 @@ router.post(
           updated_by,
           updated_at
          )
+<<<<<<< Updated upstream
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+=======
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+>>>>>>> Stashed changes
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
+<<<<<<< Updated upstream
           source || null,
+=======
+>>>>>>> Stashed changes
           quotation_status || "Pending",
           parsedFollowUpDate,
           quotation_no || null,
@@ -370,7 +384,7 @@ router.post(
           description || null,
           activity_type || null,
           updatedBy,
-        ]
+        ],
       );
 
       const quotationId = result.insertId;
@@ -387,7 +401,7 @@ router.post(
           `INSERT INTO quotation_followup_files 
           (quot_follow_up_id, file_name, file_path, public_id)
           VALUES ?`,
-          [fileValues]
+          [fileValues],
         );
       }
 
@@ -400,10 +414,12 @@ router.post(
 
         const activityMsg = `${userName} created quotation ${quotation_no}`;
 
-        await db.promise().query(
-          "INSERT INTO activities (message, user_name) VALUES (?, ?)",
-          [activityMsg, userName]
-        );
+        await db
+          .promise()
+          .query("INSERT INTO activities (message, user_name) VALUES (?, ?)", [
+            activityMsg,
+            userName,
+          ]);
       } catch (activityErr) {
         console.log("Activity Log Error:", activityErr.message);
       }
@@ -424,7 +440,7 @@ router.post(
         stack: err.stack,
       });
     }
-  }
+  },
 );
 
 // =============================
@@ -1114,4 +1130,86 @@ router.put("/update-main-status/:id", async (req, res) => {
   }
 });
 
+<<<<<<< Updated upstream
+=======
+// =====================================
+// GET COMPLETE QUOTATION DETAILS
+// =====================================
+
+router.get(
+  "/full-details/:quotation_id",
+  authenticateAndAuthorize(),
+  async (req, res) => {
+    try {
+      const quotation_id = req.params.quotation_id;
+
+      const [rows] = await db.promise().query(
+        `
+        SELECT
+          q.id,
+          q.lead_id,
+          q.company_name,
+          q.customer_name,
+          q.reference,
+          q.source,
+          q.quotation_status,
+          q.follow_up_date,
+          q.quotation_no,
+          q.quotation_date,
+          q.grand_total,
+          q.assignee,
+          q.rate,
+          q.discount,
+          q.tax,
+          q.amount,
+          q.description,
+          q.activity_type,
+          q.proforma_percentage,
+          q.updated_by,
+          q.updated_at,
+          q.created_at,
+
+          l.status as lead_status,
+          l.assignee as lead_assignee,
+
+          (
+            SELECT COUNT(*)
+            FROM quotation q2
+            WHERE q2.lead_id = q.lead_id
+          ) as total_quotations
+
+        FROM quotation q
+
+        LEFT JOIN lead l
+        ON l.lead_id = q.lead_id
+
+        WHERE q.id = ?
+        `,
+        [quotation_id]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({
+          success: false,
+          message: "Quotation not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        data: rows[0],
+      });
+
+    } catch (err) {
+      console.log(err);
+
+      res.status(500).json({
+        success: false,
+        message: err.message,
+      });
+    }
+  }
+);
+
+>>>>>>> Stashed changes
 module.exports = router;
