@@ -77,17 +77,19 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
         customer_name,
         quotation_no,
         assignee,
+        source,
         total,
         proforma_percentage,
         status
       )
-      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, CURDATE(), ?, ?, ?, ?,?, ?, ?, ?)`,
       [
         pi_no,
         q.id,
         q.customer_name,
         q.quotation_no,
         q.assignee,
+        q.source,
         amount,
         newPercentage,
         "partial",
@@ -122,6 +124,7 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
       success: true,
       message: "PI Created Successfully",
     });
+
   } catch (err) {
     console.log(err);
 
@@ -215,6 +218,7 @@ router.get("/list", async (req, res) => {
         pi.customer_name,
         pi.quotation_no,
         pi.assignee,
+        pi.source,
         pi.total,
         pi.proforma_percentage,
         pi.status,
@@ -237,6 +241,7 @@ router.get("/list", async (req, res) => {
     }));
 
     res.json({ success: true, count: result.length, data: result });
+    console.log(result)
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

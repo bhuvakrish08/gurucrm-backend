@@ -363,16 +363,24 @@ router.put("/status/:id", (req, res) => {
 
 
 router.get("/asignee", (req, res) => {
-    const { status } = req.query;
+    const { status, role } = req.query;
 
-    let sql = "SELECT id, name FROM users";
+    let sql = "SELECT id, name, role FROM users WHERE 1=1";
     const values = [];
 
     // Apply status filter if provided
     if (status) {
-        sql += " WHERE status = ?";
+        sql += " AND status = ?";
         values.push(status);
     }
+
+    // Apply role filter if provided
+    if (role) {
+        sql += " AND role = ?";
+        values.push(role);
+    }
+
+    sql += " AND role != 'Super Admin'";
 
     sql += " ORDER BY name ASC";
 
