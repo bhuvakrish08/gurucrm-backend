@@ -8,60 +8,73 @@ const router = express.Router();
    READ ALL LEADS (for table listing)
 ===================================== */
 router.get("/read", authenticateAndAuthorize(), (req, res) => {
-  const loggedInUser = req.user.username;
   const loggedInRole = req.user.role;
 
-  let sql = `
-    SELECT 
-  l.lead_id,
-  l.company_name,
-  l.customer_name,
-  l.reference,
-  ls.name AS source,
-  l.assignee,
-  l.status,
-  l.created_at,
-  l.updated_by,
-  l.updated_at,
-  NOW() AS server_time,
-  (
-    SELECT f.follow_up_date
-    FROM lead_follow_up f
-    WHERE f.lead_id = l.lead_id
-    ORDER BY f.follow_up_date DESC
-    LIMIT 1
-  ) AS next_follow_up_date
-    FROM lead l
-    LEFT JOIN inquiry_lead_source ls
-      ON ls.id = l.source
-  `;
-
-  let values = [];
-
-  // ✅ Admin sees all leads
-  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin") {
-    sql += `
-      WHERE FIND_IN_SET(?, REPLACE(l.assignee, ', ', ','))
-    `;
-
-    values.push(loggedInUser);
-  }
-
-  sql += ` ORDER BY l.lead_id DESC`;
-
-  db.query(sql, values, (err, result) => {
-    if (err) {
-      console.log(err);
-
-      return res.status(500).json({
-        success: false,
-        error: err,
-      });
+  // Fetch full name dynamically using req.user.id
+  db.query("SELECT name FROM users WHERE id = ?", [req.user.id], (err, uRows) => {
+    let loggedInUser = req.user.username;
+    if (!err && uRows && uRows.length > 0) {
+      loggedInUser = uRows[0].name;
     }
 
-    res.json({
-      success: true,
-      result,
+    let sql = `
+      SELECT 
+    l.lead_id,
+    l.company_name,
+    l.customer_name,
+    l.reference,
+    COALESCE(ls.name, l.source) AS source,
+    l.assignee,
+    l.status,
+    l.created_at,
+    l.updated_by,
+    l.updated_at,
+    NOW() AS server_time,
+    (
+      SELECT f.follow_up_date
+      FROM lead_follow_up f
+      WHERE f.lead_id = l.lead_id
+      ORDER BY f.follow_up_date DESC
+      LIMIT 1
+    ) AS next_follow_up_date
+      FROM lead l
+      LEFT JOIN inquiry_lead_source ls
+        ON ls.id = l.source
+    `;
+
+    let values = [];
+
+    // ✅ Admin, Leads Management, Sales & Estimation sees all leads
+    if (
+      loggedInRole !== "Admin" &&
+      loggedInRole !== "Super Admin" &&
+      loggedInRole !== "Leads Management" &&
+      loggedInRole !== "Sales" &&
+      loggedInRole !== "Estimation"
+    ) {
+      sql += `
+        WHERE (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)
+      `;
+
+      values.push(loggedInUser, loggedInUser);
+    }
+
+    sql += ` ORDER BY l.lead_id DESC`;
+
+    db.query(sql, values, (err, result) => {
+      if (err) {
+        console.log(err);
+
+        return res.status(500).json({
+          success: false,
+          error: err,
+        });
+      }
+
+      res.json({
+        success: true,
+        result,
+      });
     });
   });
 });
@@ -69,13 +82,16 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
    GET ALL LEADS (sales route)
 ===================================== */
 router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
-  const sql = `
+  const loggedInUser = req.user.username;
+  const loggedInRole = req.user.role;
+
+  let sql = `
     SELECT
       l.lead_id,
       l.company_name,
       l.customer_name,
       l.reference,
-      ls.name AS source,
+      COALESCE(ls.name, l.source) AS source,
       l.priority,
       l.assignee,
       l.status,
@@ -89,10 +105,26 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       ON ls.id = l.source
     LEFT JOIN inquiry_lead_category lc
       ON lc.id = l.category
-    ORDER BY l.lead_id DESC
+    WHERE 1=1
   `;
 
-  db.query(sql, (err, result) => {
+  let values = [];
+
+  // ✅ Admin, Leads Management, Sales & Estimation sees all leads
+  if (
+    loggedInRole !== "Admin" &&
+    loggedInRole !== "Super Admin" &&
+    loggedInRole !== "Leads Management" &&
+    loggedInRole !== "Sales" &&
+    loggedInRole !== "Estimation"
+  ) {
+    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+    values.push(loggedInUser, loggedInUser);
+  }
+
+  sql += " ORDER BY l.lead_id DESC";
+
+  db.query(sql, values, (err, result) => {
     if (err) {
       return res.status(500).json({
         success: false,
@@ -124,7 +156,7 @@ router.get(
       l.company_name,
       l.customer_name,
       l.reference,
-      ls.name AS source,
+      COALESCE(ls.name, l.source) AS source,
       l.priority,
       l.assignee,
       lc.name AS category,
@@ -234,54 +266,79 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
 
   const updated_by = req.user.username;
 
-  const sql = `
-    UPDATE lead
-    SET 
-      company_name = ?,
-      customer_name = ?,
-      reference = ?,
-      source = ?,
-      status = ?,
-      priority = ?,
-      assignee = ?,
-      category = ?,
-      description = ?,
-      updated_by = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE lead_id = ?
-  `;
-
-  db.query(
-    sql,
-    [
-      company_name,
-      customer_name,
-      reference,
-      source,
-      status,
-      priority,
-      assignee,
-      category,
-      description,
-      updated_by,
-      leadId,
-    ],
-    (err, result) => {
-      if (err) {
-        console.error(err);
-        return res.status(500).json({
-          success: false,
-          message: "Error updating lead",
-          error: err,
-        });
-      }
-
-      res.json({
-        success: true,
-        message: "Lead updated successfully",
+  db.query("SELECT status FROM lead WHERE lead_id = ?", [leadId], (err, rows) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({
+        success: false,
+        message: "Database error",
+        error: err,
       });
-    },
-  );
+    }
+
+    if (
+      rows &&
+      rows.length > 0 &&
+      rows[0].status === "Won" &&
+      status !== "Won" &&
+      req.user.role !== "Admin" &&
+      req.user.role !== "Super Admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Admin can change status after lead is Won",
+      });
+    }
+
+    const sql = `
+      UPDATE lead
+      SET 
+        company_name = ?,
+        customer_name = ?,
+        reference = ?,
+        source = ?,
+        status = ?,
+        priority = ?,
+        assignee = ?,
+        category = ?,
+        description = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE lead_id = ?
+    `;
+
+    db.query(
+      sql,
+      [
+        company_name,
+        customer_name,
+        reference,
+        source,
+        status,
+        priority,
+        assignee,
+        category,
+        description,
+        updated_by,
+        leadId,
+      ],
+      (err, result) => {
+        if (err) {
+          console.error(err);
+          return res.status(500).json({
+            success: false,
+            message: "Error updating lead",
+            error: err,
+          });
+        }
+
+        res.json({
+          success: true,
+          message: "Lead updated successfully",
+        });
+      },
+    );
+  });
 });
 
 /* =====================================
@@ -371,20 +428,9 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
 router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
   const id = req.params.id;
   const { status } = req.body;
+  const loggedInRole = req.user.role;
 
-  const sql = `
-    UPDATE \`lead\`
-    SET 
-      status = ?,
-      updated_by = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE lead_id = ?
-  `;
-
-  // ✅ FIXED: updated_by pan set karo status change na time
-  const updated_by = req.user.username;
-
-  db.query(sql, [status, updated_by, id], (err, result) => {
+  db.query("SELECT status FROM lead WHERE lead_id = ?", [id], (err, rows) => {
     if (err) {
       console.log(err);
       return res.status(500).json({
@@ -394,9 +440,45 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
       });
     }
 
-    res.json({
-      success: true,
-      message: "Status updated successfully",
+    if (
+      rows &&
+      rows.length > 0 &&
+      rows[0].status === "Won" &&
+      loggedInRole !== "Admin" &&
+      loggedInRole !== "Super Admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Admin can change status after lead is Won",
+      });
+    }
+
+    const sql = `
+      UPDATE \`lead\`
+      SET 
+        status = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE lead_id = ?
+    `;
+
+    // ✅ FIXED: updated_by pan set karo status change na time
+    const updated_by = req.user.username;
+
+    db.query(sql, [status, updated_by, id], (err, result) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({
+          success: false,
+          message: "Database error",
+          error: err,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Status updated successfully",
+      });
     });
   });
 });
@@ -470,13 +552,16 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     to_followup,
   } = req.query;
 
+  const loggedInUser = req.user.username;
+  const loggedInRole = req.user.role;
+
   let sql = `
     SELECT 
       l.lead_id,
       l.company_name,
       l.customer_name,
       l.reference,
-      ls.name AS source,
+      COALESCE(ls.name, l.source) AS source,
       l.assignee,
       l.status,
       l.created_at,
@@ -497,6 +582,12 @@ NOW() AS server_time,
   `;
 
   let values = [];
+
+  // ✅ Admin & Leads Management sees all leads
+  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
+    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+    values.push(loggedInUser, loggedInUser);
+  }
 
   if (company_name) {
     sql += " AND l.company_name LIKE ?";
