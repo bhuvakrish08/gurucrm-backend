@@ -8,6 +8,66 @@ const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 const router = express.Router();
 
 // =============================
+// ASSIGNEE ROLE VALIDATION HELPER
+// =============================
+async function validateAssignee(assignee, assignerRole) {
+  if (!assignee) return null;
+  const assigneeName = String(assignee).trim();
+  if (!assigneeName) return null;
+
+  const [userRows] = await db.promise().query(
+    "SELECT role, name FROM users WHERE SUBSTRING_INDEX(name, ' ', 1) = ? AND status = 1",
+    [assigneeName]
+  );
+
+  if (userRows.length === 0) {
+    const [userRowsFull] = await db.promise().query(
+      "SELECT role, name FROM users WHERE name = ? AND status = 1",
+      [assigneeName]
+    );
+    if (userRowsFull.length === 0) {
+      return `Assignee user "${assigneeName}" not found or inactive`;
+    }
+    userRows.push(...userRowsFull);
+  }
+
+  const targetRole = userRows[0].role;
+  if (targetRole === 'Super Admin') {
+    return "Cannot assign to Super Admin";
+  }
+
+  if (assignerRole === 'Sales' && targetRole !== 'Estimation') {
+    return "Sales users can only assign Estimation users";
+  }
+  if (assignerRole === 'Estimation' && targetRole !== 'Sales') {
+    return "Estimation users can only assign Sales users";
+  }
+
+  return null;
+}
+
+async function resolveUserName(assigneeName) {
+  if (!assigneeName) return "";
+  const name = String(assigneeName).trim();
+  if (!name) return "";
+
+  const [rows1] = await db.promise().query(
+    "SELECT name FROM users WHERE SUBSTRING_INDEX(name, ' ', 1) = ? AND status = 1",
+    [name]
+  );
+  if (rows1.length > 0) return rows1[0].name;
+
+  const [rows2] = await db.promise().query(
+    "SELECT name FROM users WHERE name = ? AND status = 1",
+    [name]
+  );
+  if (rows2.length > 0) return rows2[0].name;
+
+  return name;
+}
+
+
+// =============================
 // CLOUDINARY STORAGE
 // =============================
 
@@ -288,6 +348,40 @@ router.post(
         req.user?.name ||
         req.user?.email ||
         "Unknown";
+
+      let prevAssignee = "";
+      if (lead_id) {
+        const [prevQuotation] = await db.promise().query(
+          `SELECT assignee FROM quotation
+           WHERE lead_id = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+          [lead_id]
+        );
+        if (prevQuotation.length > 0) {
+          prevAssignee = prevQuotation[0].assignee || "";
+        } else {
+          const [leadRows] = await db.promise().query(
+            "SELECT assignee FROM lead WHERE lead_id = ?",
+            [lead_id]
+          );
+          if (leadRows.length > 0) {
+            prevAssignee = leadRows[0].assignee || "";
+          }
+        }
+      }
+
+      const resolvedAssignee = await resolveUserName(assignee);
+      const resolvedPrevAssignee = await resolveUserName(prevAssignee);
+
+      const normalizeName = (name) => String(name || "").trim().toLowerCase();
+      if (assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
+        const assigneeErr = await validateAssignee(assignee, req.user?.role);
+        if (assigneeErr) {
+          return res.status(400).json({ success: false, message: assigneeErr });
+        }
+      }
+
 
       // Get lead's source
       let source = null;
@@ -614,7 +708,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
 // UPDATE QUOTATION DATA
 // =============================
 
-router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
+router.put("/update/:id", authenticateAndAuthorize(), upload.array("files", 5), async (req, res) => {
   try {
     const {
       quotation_no,
@@ -633,6 +727,27 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
       req.user?.name ||
       req.user?.email ||
       "Unknown";
+
+    let prevAssignee = "";
+    const [currentQuotation] = await db.promise().query(
+      "SELECT assignee FROM quotation WHERE id = ?",
+      [req.params.id]
+    );
+    if (currentQuotation.length > 0) {
+      prevAssignee = currentQuotation[0].assignee || "";
+    }
+
+    const resolvedAssignee = await resolveUserName(assignee);
+    const resolvedPrevAssignee = await resolveUserName(prevAssignee);
+
+    const normalizeName = (name) => String(name || "").trim().toLowerCase();
+    if (assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
+      const assigneeErr = await validateAssignee(assignee, req.user?.role);
+      if (assigneeErr) {
+        return res.status(400).json({ success: false, message: assigneeErr });
+      }
+    }
+
 
     const parseNum = (val) => {
       if (val === undefined || val === null || val === '') return null;
@@ -704,6 +819,23 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
       console.log("Activity Log Error:", activityErr.message);
     }
 
+    // Save files if uploaded
+    if (req.files && req.files.length > 0) {
+      const fileValues = req.files.map((file) => [
+        req.params.id,
+        file.originalname,
+        file.path,
+        file.filename || file.public_id || null,
+      ]);
+
+      await db.promise().query(
+        `INSERT INTO quotation_followup_files 
+         (quot_follow_up_id, file_name, file_path, public_id)
+         VALUES ?`,
+        [fileValues]
+      );
+    }
+
     res.json({
       success: true,
       message: "Quotation updated successfully",
@@ -735,6 +867,12 @@ router.put(
           message: "Assignee required",
         });
       }
+
+      const assigneeErr = await validateAssignee(assignee, req.user?.role);
+      if (assigneeErr) {
+        return res.status(400).json({ success: false, message: assigneeErr });
+      }
+
 
       const updatedBy =
         req.user?.username || req.user?.name || req.user?.email || "Unknown";
@@ -909,21 +1047,19 @@ router.put(
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
           await db.promise().query(
-            `INSERT INTO quotation_assignee_files
+            `INSERT INTO quotation_followup_files
             (
-              quotation_id,
-              filename,
-              filepath,
-              description,
+              quot_follow_up_id,
+              file_name,
+              file_path,
               public_id
             )
             VALUES
-            (?, ?, ?, ?, ?)`,
+            (?, ?, ?, ?)`,
             [
               quotationId,
               file.originalname,
               file.path,
-              description || null,
               file.filename || file.public_id || null,
             ],
           );
@@ -955,6 +1091,14 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
     const { quotation_status } = req.body;
     const updatedBy =
       req.user?.username || req.user?.name || req.user?.email || "Unknown";
+
+    const isKhushaliEstimation =
+      req.user?.role === "Estimation" &&
+      req.user?.username?.toLowerCase().startsWith("khushali");
+
+    if (isKhushaliEstimation && (quotation_status === "Approved" || quotation_status === "Declined")) {
+      return res.status(403).json({ success: false, message: "Estimation users are not authorized to approve or decline quotations." });
+    }
 
     if (quotation_status === "Approved") {
 
