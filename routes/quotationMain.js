@@ -73,27 +73,67 @@ async function resolveUserName(assigneeName) {
 
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: async (req, file) => ({
-    folder: "crm/quotations",
-    resource_type: "auto",
-  }),
+  params: async (req, file) => {
+    const ext = file.originalname.split(".").pop().toLowerCase();
+    const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
+    const nameWithoutExt = file.originalname.substring(0, file.originalname.lastIndexOf("."));
+    const cleanName = nameWithoutExt.replace(/[^a-zA-Z0-9]/g, "_");
+    const publicId = isRaw ? `${cleanName}-${uniqueSuffix}.${ext}` : `${cleanName}-${uniqueSuffix}`;
+    return {
+      folder: "crm/quotations",
+      resource_type: isRaw ? "raw" : "auto",
+      public_id: publicId,
+    };
+  },
 });
 
 const IMAGE_EXT = ["jpg", "jpeg", "png"];
-const DOC_EXT = ["pdf", "doc", "xlsx", "csv", "pptx", "txt"];
-const MAX_DOC_SIZE = 15 * 1024 * 1024;
+const EXCEL_EXT = ["xlsx", "xls", "csv", "excel"];
+const CAD_EXT = ["dwg", "dxf"];
+const DOC_EXT = ["pdf", "txt", "doc", "docx"];
+
+const MAX_DOC_SIZE = 5 * 1024 * 1024;
 
 const upload = multer({
   storage,
   limits: { fileSize: MAX_DOC_SIZE },
   fileFilter: (req, file, cb) => {
     const ext = file.originalname.split(".").pop().toLowerCase();
-    if (![...IMAGE_EXT, ...DOC_EXT].includes(ext)) {
+    if (![...IMAGE_EXT, ...EXCEL_EXT, ...CAD_EXT, ...DOC_EXT].includes(ext)) {
       return cb(new Error("Unsupported file type"), false);
     }
     cb(null, true);
   },
 });
+
+function validateUploadedFiles(req) {
+  if (!req.files) return null;
+
+  for (const file of req.files) {
+    const ext = file.originalname.split(".").pop().toLowerCase();
+
+    if (EXCEL_EXT.includes(ext)) {
+      if (file.size > 2 * 1024 * 1024) {
+        return `Excel file "${file.originalname}" size should be less than 2MB`;
+      }
+    } else if (CAD_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `CAD file "${file.originalname}" size should be less than 5MB`;
+      }
+    } else if (IMAGE_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `Image file "${file.originalname}" size should be less than 5MB`;
+      }
+    } else if (DOC_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `Document file "${file.originalname}" size should be less than 5MB`;
+      }
+    }
+  }
+
+  return null;
+}
 
 // =============================
 // READ ALL QUOTATIONS
@@ -324,7 +364,22 @@ router.post(
   upload.array("files", 5),
   async (req, res) => {
     try {
-      const {
+      const sizeError = validateUploadedFiles(req);
+      if (sizeError) {
+        if (req.files && req.files.length > 0) {
+          for (const file of req.files) {
+            if (file.filename || file.public_id) {
+              const ext = file.originalname ? file.originalname.split(".").pop().toLowerCase() : "";
+              const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+              await cloudinary.uploader.destroy(file.filename || file.public_id, {
+                resource_type: isRaw ? "raw" : "image"
+              });
+            }
+          }
+        }
+        return res.status(400).json({ success: false, message: sizeError });
+      }
+      let {
         lead_id,
         company_name,
         customer_name,
@@ -371,11 +426,18 @@ router.post(
         }
       }
 
+      if (quotation_status === "Revision") {
+        const [estUsers] = await db.promise().query(
+          "SELECT name FROM users WHERE role = 'Estimation' LIMIT 1"
+        );
+        assignee = estUsers.length > 0 ? estUsers[0].name : "Khushali";
+      }
+
       const resolvedAssignee = await resolveUserName(assignee);
       const resolvedPrevAssignee = await resolveUserName(prevAssignee);
 
       const normalizeName = (name) => String(name || "").trim().toLowerCase();
-      if (assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
+      if (quotation_status !== "Revision" && assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
         const assigneeErr = await validateAssignee(assignee, req.user?.role);
         if (assigneeErr) {
           return res.status(400).json({ success: false, message: assigneeErr });
@@ -518,6 +580,13 @@ router.post(
       );
 
       const quotationId = result.insertId;
+
+      if (quotation_status === "Revision" && lead_id) {
+        await db.promise().query(
+          "UPDATE `lead` SET assignee = ? WHERE lead_id = ?",
+          [assignee, lead_id]
+        );
+      }
 
       if (req.files && req.files.length > 0) {
         const fileValues = req.files.map((f) => [
@@ -686,8 +755,14 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
       values.push(assignee);
     }
     if (quotation_status) {
-      sql += " AND q.quotation_status = ?";
-      values.push(quotation_status);
+      if (quotation_status === "Won") {
+        sql += " AND (q.quotation_status = 'Approved' OR q.quotation_status = 'Won')";
+      } else if (quotation_status === "Pending") {
+        sql += " AND (q.quotation_status IS NULL OR q.quotation_status = 'Pending' OR q.quotation_status = 'Declined')";
+      } else {
+        sql += " AND q.quotation_status = ?";
+        values.push(quotation_status);
+      }
     }
     if (from_date && to_date) {
       sql += " AND DATE(l.created_at) BETWEEN ? AND ?";
@@ -710,10 +785,26 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
 
 router.put("/update/:id", authenticateAndAuthorize(), upload.array("files", 5), async (req, res) => {
   try {
-    const {
+    const sizeError = validateUploadedFiles(req);
+    if (sizeError) {
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          if (file.filename || file.public_id) {
+            const ext = file.originalname ? file.originalname.split(".").pop().toLowerCase() : "";
+            const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+            await cloudinary.uploader.destroy(file.filename || file.public_id, {
+              resource_type: isRaw ? "raw" : "image"
+            });
+          }
+        }
+      }
+      return res.status(400).json({ success: false, message: sizeError });
+    }
+    let {
       quotation_no,
       quotation_date,
       activity_type,
+      quotation_status,
       amount,
       discount,
       tax,
@@ -729,25 +820,53 @@ router.put("/update/:id", authenticateAndAuthorize(), upload.array("files", 5), 
       "Unknown";
 
     let prevAssignee = "";
+    let leadId = null;
+    let logs = [];
     const [currentQuotation] = await db.promise().query(
-      "SELECT assignee FROM quotation WHERE id = ?",
+      "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
       [req.params.id]
     );
     if (currentQuotation.length > 0) {
       prevAssignee = currentQuotation[0].assignee || "";
+      leadId = currentQuotation[0].lead_id;
+      try {
+        logs = currentQuotation[0].assignee_log ? JSON.parse(currentQuotation[0].assignee_log) : [];
+        if (!Array.isArray(logs)) logs = [];
+      } catch (e) {
+        logs = [];
+      }
+    }
+
+    if (quotation_status === "Revision") {
+      const [estUsers] = await db.promise().query(
+        "SELECT name FROM users WHERE role = 'Estimation' LIMIT 1"
+      );
+      assignee = estUsers.length > 0 ? estUsers[0].name : "Khushali";
     }
 
     const resolvedAssignee = await resolveUserName(assignee);
     const resolvedPrevAssignee = await resolveUserName(prevAssignee);
 
     const normalizeName = (name) => String(name || "").trim().toLowerCase();
-    if (assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
+    if (quotation_status !== "Revision" && assignee && normalizeName(resolvedAssignee) !== normalizeName(resolvedPrevAssignee)) {
       const assigneeErr = await validateAssignee(assignee, req.user?.role);
       if (assigneeErr) {
         return res.status(400).json({ success: false, message: assigneeErr });
       }
     }
 
+    let assigneeLogStr = null;
+    if (quotation_status === "Revision" && assignee !== prevAssignee) {
+      logs.push({
+        previous_assignee: prevAssignee,
+        new_assignee: assignee,
+        changed_by: updatedBy,
+        changed_at: new Date().toISOString(),
+        description: "Changed to Revision",
+        files: [],
+      });
+      assigneeLogStr = JSON.stringify(logs);
+    }
 
     const parseNum = (val) => {
       if (val === undefined || val === null || val === '') return null;
@@ -778,12 +897,14 @@ router.put("/update/:id", authenticateAndAuthorize(), upload.array("files", 5), 
         quotation_no = ?, 
         quotation_date = ?, 
         activity_type = ?, 
+        quotation_status = ?,
         amount = ?, 
         discount = ?, 
         tax = ?, 
         grand_total = ?, 
         description = ?, 
         assignee = ?,
+        assignee_log = COALESCE(?, assignee_log),
         updated_by = ?,
         updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
@@ -791,16 +912,25 @@ router.put("/update/:id", authenticateAndAuthorize(), upload.array("files", 5), 
         quotation_no || null,
         parsedQuotationDate,
         activity_type || null,
+        quotation_status || "Pending",
         parsedAmount,
         parsedDiscount,
         parsedTax,
         parsedGrandTotal,
         description || null,
         assignee || null,
+        assigneeLogStr,
         updatedBy,
         req.params.id,
       ]
     );
+
+    if (quotation_status === "Revision" && leadId) {
+      await db.promise().query(
+        "UPDATE `lead` SET assignee = ? WHERE lead_id = ?",
+        [assignee, leadId]
+      );
+    }
 
     try {
       const userName =
@@ -857,6 +987,21 @@ router.put(
   upload.array("files", 5),
   async (req, res) => {
     try {
+      const sizeError = validateUploadedFiles(req);
+      if (sizeError) {
+        if (req.files && req.files.length > 0) {
+          for (const file of req.files) {
+            if (file.filename || file.public_id) {
+              const ext = file.originalname ? file.originalname.split(".").pop().toLowerCase() : "";
+              const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+              await cloudinary.uploader.destroy(file.filename || file.public_id, {
+                resource_type: isRaw ? "raw" : "image"
+              });
+            }
+          }
+        }
+        return res.status(400).json({ success: false, message: sizeError });
+      }
       const { assignee, description } = req.body;
 
       const lead_id = req.params.lead_id;
@@ -1301,14 +1446,18 @@ router.delete("/:id", async (req, res) => {
     const deletedQuotation = qRow[0];
 
     const [files] = await db.promise().query(
-      "SELECT public_id FROM quotation_followup_files WHERE quot_follow_up_id = ?",
+      "SELECT public_id, file_name FROM quotation_followup_files WHERE quot_follow_up_id = ?",
       [req.params.id]
     );
 
     for (const file of files) {
       if (file.public_id) {
         try {
-          await cloudinary.uploader.destroy(file.public_id);
+          const ext = file.file_name ? file.file_name.split(".").pop().toLowerCase() : "";
+          const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+          await cloudinary.uploader.destroy(file.public_id, {
+            resource_type: isRaw ? "raw" : "image"
+          });
         } catch (e) {
           console.log("Cloudinary delete error:", e.message);
         }
