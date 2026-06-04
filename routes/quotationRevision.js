@@ -14,10 +14,11 @@ const router = express.Router();
 // ======================================
 
 const IMAGE_EXT = ["jpg", "jpeg", "png"];
-const DOC_EXT = ["pdf", "txt", "doc", "docx", "xlsx", "csv", "pptx"];
+const EXCEL_EXT = ["xlsx", "xls", "csv", "excel"];
+const CAD_EXT = ["dwg", "dxf"];
+const DOC_EXT = ["pdf", "txt", "doc", "docx"];
 
-const MAX_IMG_SIZE = 5 * 1024 * 1024;
-const MAX_DOC_SIZE = 15 * 1024 * 1024;
+const MAX_DOC_SIZE = 5 * 1024 * 1024;
 
 // ======================================
 // CLOUDINARY STORAGE
@@ -25,10 +26,19 @@ const MAX_DOC_SIZE = 15 * 1024 * 1024;
 
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: async (req, file) => ({
-    folder: "crm/quotation_revision",
-    resource_type: "auto",
-  }),
+  params: async (req, file) => {
+    const ext = file.originalname.split(".").pop().toLowerCase();
+    const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
+    const nameWithoutExt = file.originalname.substring(0, file.originalname.lastIndexOf("."));
+    const cleanName = nameWithoutExt.replace(/[^a-zA-Z0-9]/g, "_");
+    const publicId = isRaw ? `${cleanName}-${uniqueSuffix}.${ext}` : `${cleanName}-${uniqueSuffix}`;
+    return {
+      folder: "crm/quotation_revision",
+      resource_type: isRaw ? "raw" : "auto",
+      public_id: publicId,
+    };
+  },
 });
 
 // ======================================
@@ -42,7 +52,7 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const ext = file.originalname.split(".").pop().toLowerCase();
 
-    if (![...IMAGE_EXT, ...DOC_EXT].includes(ext)) {
+    if (![...IMAGE_EXT, ...EXCEL_EXT, ...CAD_EXT, ...DOC_EXT].includes(ext)) {
       return cb(new Error("Unsupported file type"), false);
     }
 
@@ -60,12 +70,22 @@ function validateUploadedFiles(req) {
   for (const file of req.files) {
     const ext = file.originalname.split(".").pop().toLowerCase();
 
-    if (IMAGE_EXT.includes(ext) && file.size > MAX_IMG_SIZE) {
-      return "Image size should be less than 5MB";
-    }
-
-    if (DOC_EXT.includes(ext) && file.size > MAX_DOC_SIZE) {
-      return "Document size should be less than 15MB";
+    if (EXCEL_EXT.includes(ext)) {
+      if (file.size > 2 * 1024 * 1024) {
+        return `Excel file "${file.originalname}" size should be less than 2MB`;
+      }
+    } else if (CAD_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `CAD file "${file.originalname}" size should be less than 5MB`;
+      }
+    } else if (IMAGE_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `Image file "${file.originalname}" size should be less than 5MB`;
+      }
+    } else if (DOC_EXT.includes(ext)) {
+      if (file.size > 5 * 1024 * 1024) {
+        return `Document file "${file.originalname}" size should be less than 5MB`;
+      }
     }
   }
 
@@ -88,6 +108,15 @@ router.post("/insert",
       const sizeError = validateUploadedFiles(req);
 
       if (sizeError) {
+          for (const file of req.files) {
+            if (file.filename || file.public_id) {
+              const ext = file.originalname ? file.originalname.split(".").pop().toLowerCase() : "";
+              const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+              await cloudinary.uploader.destroy(file.filename || file.public_id, {
+                resource_type: isRaw ? "raw" : "image"
+              });
+            }
+          }
         return res.status(400).json({
           success: false,
           message: sizeError,
