@@ -8,7 +8,6 @@ const router = express.Router();
 router.get("/read", async (req, res) => {
 
  try {
-
   const {
    search1,
    search2,
