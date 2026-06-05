@@ -18,10 +18,10 @@ const router = express.Router();
 // =============================
 
 const IMAGE_EXT = ["jpg", "jpeg", "png"];
-const DOC_EXT = ["pdf", "txt", "doc", "xlsx", "csv", "pptx"];
+const DOC_EXT = ["pdf", "txt", "doc", "xlsx", "csv", "pptx", "dwg"];
 
 const MAX_IMG_SIZE = 5 * 1024 * 1024;
-const MAX_DOC_SIZE = 15 * 1024 * 1024;
+const MAX_DOC_SIZE = 5 * 1024 * 1024;
 
 // =============================
 // CLOUDINARY STORAGE (NEW)
@@ -82,7 +82,18 @@ function validateUploadedFiles(req) {
 router.post(
   "/insert",
   authenticateAndAuthorize(),
-  upload.array("files", 5),
+  (req, res, next) => {
+    upload.array("files", 5)(req, res, (err) => {
+      if (err) {
+        console.log("MULTER ERROR =>", err);
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+        });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       const sizeError = validateUploadedFiles(req);
