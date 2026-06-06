@@ -453,19 +453,46 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
       });
     }
 
-    const sql = `
-      UPDATE \`lead\`
-      SET 
-        status = ?,
-        updated_by = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE lead_id = ?
-    `;
-
-    // ✅ FIXED: updated_by pan set karo status change na time
     const updated_by = req.user.username;
 
-    db.query(sql, [status, updated_by, id], (err, result) => {
+    let sql;
+    let values;
+
+    if (status === "Won") {
+      sql = `
+    UPDATE \`lead\`
+    SET
+      status = ?,
+      assignee = ?,
+      updated_by = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE lead_id = ?
+  `;
+
+      values = [
+        status,
+        "Khushali", // exact assignee name
+        updated_by,
+        id,
+      ];
+    } else {
+      sql = `
+    UPDATE \`lead\`
+    SET
+      status = ?,
+      updated_by = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE lead_id = ?
+  `;
+
+      values = [
+        status,
+        updated_by,
+        id,
+      ];
+    }
+
+    db.query(sql, values, (err, result) => {
       if (err) {
         console.log(err);
         return res.status(500).json({
