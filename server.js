@@ -38,6 +38,7 @@ const quotationMainRoutes = require('./routes/quotationMain')
 const pi = require('./routes/perfomainvoices')
 const activitiesRoutes = require('./routes/activities');
 const quotationRevisionRoutes = require("./routes/quotationRevision");
+const calendarRoutes = require("./routes/calender");
 
 
 
@@ -81,6 +82,7 @@ app.use("/api/quotation", quotationMainRoutes)
 app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/api/quotation-revision", quotationRevisionRoutes);
+app.use("/api/calendar", calendarRoutes);
 
 
 
