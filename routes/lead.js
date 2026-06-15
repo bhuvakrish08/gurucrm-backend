@@ -3,6 +3,10 @@ const db = require("../db");
 const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 
 const router = express.Router();
+// 🚦 Traffic light thresholds from .env
+const YELLOW_HOURS = parseFloat(process.env.YELLOW_HOURS) || 24;
+const RED_HOURS    = parseFloat(process.env.RED_HOURS)    || 48;
+
 
 /* =====================================
    READ ALL LEADS (for table listing)
@@ -36,10 +40,31 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       WHERE f.lead_id = l.lead_id
       ORDER BY f.follow_up_date DESC
       LIMIT 1
-    ) AS next_follow_up_date
+    ) AS next_follow_up_date,
+    TIMESTAMPDIFF(HOUR,
+      COALESCE(last_fu.last_followup_at, l.created_at),
+      NOW()
+    ) AS hours_since_last_activity,
+    CASE
+      WHEN l.status IN ('Won', 'Lost') THEN COALESCE(l.followup_status, 'green')
+      WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
+        COALESCE(last_fu.last_followup_at, l.created_at),
+        NOW()
+      ) / 3600.0 >= ${RED_HOURS} THEN 'red'
+      WHEN l.followup_status = 'yellow' OR TIMESTAMPDIFF(SECOND,
+        COALESCE(last_fu.last_followup_at, l.created_at),
+        NOW()
+      ) / 3600.0 >= ${YELLOW_HOURS} THEN 'yellow'
+      ELSE 'green'
+    END AS follow_up_status
       FROM lead l
       LEFT JOIN inquiry_lead_source ls
         ON ls.id = l.source
+      LEFT JOIN (
+        SELECT lead_id, MAX(created_at) AS last_followup_at
+        FROM lead_follow_up
+        GROUP BY lead_id
+      ) last_fu ON last_fu.lead_id = l.lead_id
     `;
 
     let values = [];
@@ -455,58 +480,104 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
 
     const updated_by = req.user.username;
 
-    let sql;
-    let values;
+    // Fetch elapsed hours using JOIN (no correlated subquery, float precision)
+    db.query(
+      `SELECT 
+         l.assignee,
+         l.followup_status,
+         ROUND(
+           TIMESTAMPDIFF(SECOND,
+             COALESCE(last_fu.last_followup_at, l.created_at),
+             NOW()
+           ) / 3600.0, 5
+         ) AS hours_elapsed
+       FROM \`lead\` l
+       LEFT JOIN (
+         SELECT lead_id, MAX(created_at) AS last_followup_at
+         FROM lead_follow_up GROUP BY lead_id
+       ) last_fu ON last_fu.lead_id = l.lead_id
+       WHERE l.lead_id = ?`,
+      [id],
+      (fetchErr, fetchRows) => {
+        const hoursElapsed = (!fetchErr && fetchRows && fetchRows[0]) ? parseFloat(fetchRows[0].hours_elapsed || 0) : 0;
+        const assigneeVal  = (!fetchErr && fetchRows && fetchRows[0]) ? (fetchRows[0].assignee || updated_by) : updated_by;
+        const storedColor  = (!fetchErr && fetchRows && fetchRows[0]) ? (fetchRows[0].followup_status || "green") : "green";
 
-    if (status === "Won") {
-      sql = `
-    UPDATE \`lead\`
-    SET
-      status = ?,
-      assignee = ?,
-      updated_by = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE lead_id = ?
-  `;
+        let statusColor = "green";
+        if (storedColor === "red" || hoursElapsed >= RED_HOURS) statusColor = "red";
+        else if (storedColor === "yellow" || hoursElapsed >= YELLOW_HOURS) statusColor = "yellow";
 
-      values = [
-        status,
-        "Khushali", // exact assignee name
-        updated_by,
-        id,
-      ];
-    } else {
-      sql = `
-    UPDATE \`lead\`
-    SET
-      status = ?,
-      updated_by = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE lead_id = ?
-  `;
+        // Log the status update event
+        db.query(
+          `INSERT INTO lead_followup_status_log
+           (lead_id, assignee, status_color, hours_elapsed, trigger_event)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, assigneeVal, statusColor, hoursElapsed, `status_updated_to_${status.toLowerCase()}`],
+          (logErr) => {
+            if (logErr) console.error("Traffic light status update log error:", logErr);
+          }
+        );
 
-      values = [
-        status,
-        updated_by,
-        id,
-      ];
-    }
+        let sql;
+        let values;
 
-    db.query(sql, values, (err, result) => {
-      if (err) {
-        console.log(err);
-        return res.status(500).json({
-          success: false,
-          message: "Database error",
-          error: err,
+        if (status === "Won") {
+          sql = `
+            UPDATE \`lead\`
+            SET
+              status = ?,
+              assignee = ?,
+              updated_by = ?,
+              followup_status = ?,
+              followup_status_updated_at = NOW(),
+              won_at = NOW(),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE lead_id = ?
+          `;
+          values = [
+            status,
+            "Khushali", // exact assignee name
+            updated_by,
+            statusColor,
+            id,
+          ];
+        } else {
+          sql = `
+            UPDATE \`lead\`
+            SET
+              status = ?,
+              updated_by = ?,
+              followup_status = ?,
+              followup_status_updated_at = NOW(),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE lead_id = ?
+          `;
+          values = [
+            status,
+            updated_by,
+            statusColor,
+            id,
+          ];
+        }
+
+        db.query(sql, values, (err, result) => {
+          if (err) {
+            console.log(err);
+            return res.status(500).json({
+              success: false,
+              message: "Database error",
+              error: err,
+            });
+          }
+
+          res.json({
+            success: true,
+            message: "Status updated successfully",
+          });
         });
       }
+    );
 
-      res.json({
-        success: true,
-        message: "Status updated successfully",
-      });
-    });
   });
 });
 
@@ -593,18 +664,39 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.status,
       l.created_at,
       l.updated_by,
-    l.updated_at,
-NOW() AS server_time,
-(
+      l.updated_at,
+      NOW() AS server_time,
+      (
         SELECT f.follow_up_date
         FROM lead_follow_up f
         WHERE f.lead_id = l.lead_id
         ORDER BY f.follow_up_date DESC
         LIMIT 1
-      ) AS next_follow_up_date
+      ) AS next_follow_up_date,
+      TIMESTAMPDIFF(HOUR,
+        COALESCE(last_fu.last_followup_at, l.created_at),
+        NOW()
+      ) AS hours_since_last_activity,
+      CASE
+        WHEN l.status IN ('Won', 'Lost') THEN COALESCE(l.followup_status, 'green')
+        WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
+          COALESCE(last_fu.last_followup_at, l.created_at),
+          NOW()
+        ) / 3600.0 >= ${RED_HOURS} THEN 'red'
+        WHEN l.followup_status = 'yellow' OR TIMESTAMPDIFF(SECOND,
+          COALESCE(last_fu.last_followup_at, l.created_at),
+          NOW()
+        ) / 3600.0 >= ${YELLOW_HOURS} THEN 'yellow'
+        ELSE 'green'
+      END AS follow_up_status
     FROM lead l
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
+    LEFT JOIN (
+      SELECT lead_id, MAX(created_at) AS last_followup_at
+      FROM lead_follow_up
+      GROUP BY lead_id
+    ) last_fu ON last_fu.lead_id = l.lead_id
     WHERE 1=1
   `;
 
@@ -772,5 +864,30 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
 //     });
 //   });
 // });
+
+
+/* =====================================
+   GET TRAFFIC LIGHT ANALYTICS DATA
+===================================== */
+router.get("/analytics/traffic-light", authenticateAndAuthorize(), (req, res) => {
+  const sql = `
+    SELECT 
+      assignee,
+      SUM(CASE WHEN status_color = 'green' THEN 1 ELSE 0 END) AS green_count,
+      SUM(CASE WHEN status_color = 'yellow' THEN 1 ELSE 0 END) AS yellow_count,
+      SUM(CASE WHEN status_color = 'red' THEN 1 ELSE 0 END) AS red_count,
+      AVG(hours_elapsed) AS avg_hours_elapsed,
+      COUNT(*) AS total_logs
+    FROM lead_followup_status_log
+    GROUP BY assignee
+  `;
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ success: false, error: err });
+    }
+    res.json({ success: true, result });
+  });
+});
 
 module.exports = router;

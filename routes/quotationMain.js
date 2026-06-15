@@ -7,6 +7,8 @@ const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 
 const router = express.Router();
 
+const YELLOW_HOURS = parseFloat(process.env.YELLOW_HOURS || "24");
+const RED_HOURS = parseFloat(process.env.RED_HOURS || "48");
 // =============================
 // ASSIGNEE ROLE VALIDATION HELPER
 // =============================
@@ -110,6 +112,99 @@ const upload = multer({
   },
 });
 
+
+async function logQuotationTrafficLight(lead_id, quotation_id, role_type, assignee) {
+  if (!lead_id) return;
+  try {
+    let hours = 0;
+    let color = 'green';
+    if (role_type === 'Estimation') {
+      let startTime = null;
+      if (quotation_id) {
+        const [qRows] = await db.promise().query('SELECT estimation_assigned_at FROM quotation WHERE id = ?', [quotation_id]);
+        if (qRows.length > 0 && qRows[0].estimation_assigned_at) {
+          startTime = qRows[0].estimation_assigned_at;
+        }
+      }
+      if (!startTime) {
+        const [lRows] = await db.promise().query('SELECT won_at FROM lead WHERE lead_id = ?', [lead_id]);
+        if (lRows.length > 0 && lRows[0].won_at) {
+          startTime = lRows[0].won_at;
+        }
+      }
+      if (startTime) {
+        const [diffQuery] = await db.promise().query('SELECT TIMESTAMPDIFF(SECOND, ?, NOW()) / 3600.0 as hrs', [startTime]);
+        hours = diffQuery[0].hrs || 0;
+      }
+    } else if (role_type === 'Sales' && quotation_id) {
+      const [qRows] = await db.promise().query('SELECT sales_assigned_at, quotation_status, follow_up_date, updated_at FROM quotation WHERE id = ?', [quotation_id]);
+      if (qRows.length > 0) {
+        const q = qRows[0];
+        let startTime = q.sales_assigned_at;
+        if (q.quotation_status === 'Sent') {
+          if (q.follow_up_date) {
+            const fuDate = new Date(q.follow_up_date);
+            fuDate.setHours(0, 0, 0, 0);
+            startTime = fuDate;
+          } else {
+            startTime = q.updated_at;
+          }
+        }
+        if (startTime) {
+          const [diffQuery] = await db.promise().query('SELECT TIMESTAMPDIFF(SECOND, ?, NOW()) / 3600.0 as hrs', [startTime]);
+          hours = diffQuery[0].hrs || 0;
+        }
+      }
+    }
+    
+    if (hours >= RED_HOURS) color = 'red';
+    else if (hours >= YELLOW_HOURS) color = 'yellow';
+    
+    await db.promise().query(
+      'INSERT INTO quotation_traffic_light_log (lead_id, quotation_id, role_type, assignee, status_color, hours_elapsed) VALUES (?, ?, ?, ?, ?, ?)',
+      [lead_id, quotation_id || null, role_type, assignee || 'Unknown', color, hours]
+    );
+  } catch(e) {
+    console.error('Traffic Light Log Error:', e);
+  }
+}
+
+async function getUserRoleMap() {
+  try {
+    const [rows] = await db.promise().query("SELECT name, role FROM users");
+    const roleMap = {};
+    rows.forEach(r => {
+      if (r.name) {
+        const fullName = r.name.toLowerCase().trim();
+        roleMap[fullName] = r.role;  // full name e.g. "darshil shah"
+        const firstName = fullName.split(' ')[0];
+        if (firstName && !roleMap[firstName]) {
+          roleMap[firstName] = r.role; // first name e.g. "darshil"
+        }
+      }
+    });
+    return roleMap;
+  } catch (err) {
+    console.error('getUserRoleMap Error:', err);
+    return {};
+  }
+}
+
+
+function determineStage(assignee, roleMap) {
+  if (!assignee) return 'Estimation';
+  const names = assignee.split(',').map(n => n.trim().toLowerCase());
+  for (const name of names) {
+    const role = roleMap[name];
+    if (role === 'Estimation') return 'Estimation';
+  }
+  for (const name of names) {
+    const role = roleMap[name];
+    if (role === 'Sales') return 'Sales';
+  }
+  return 'Estimation';
+}
+
 function validateUploadedFiles(req) {
   if (!req.files) return null;
 
@@ -199,7 +294,11 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.updated_at,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
-          IF(q_approved.approved_count > 0, 1, 0) AS has_approved
+          IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
+          l.won_at,
+          q.sales_assigned_at,
+          q.estimation_assigned_at,
+          q.estimation_assigned_at
         FROM lead l
         LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
         LEFT JOIN (
@@ -257,7 +356,11 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.updated_at,
           q.created_at as quotation_created_at,
           q_first.first_quotation_date,
-          IF(q_approved.approved_count > 0, 1, 0) AS has_approved
+          IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
+          l.won_at,
+          q.sales_assigned_at,
+          q.estimation_assigned_at,
+          q.estimation_assigned_at
         FROM lead l
         LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
         LEFT JOIN (
@@ -298,7 +401,97 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
         [userName, userName, userName],
       );
     }
-    res.json({ success: true, result: rows });
+        // Compute quotation_dot_color for each row
+    const roleMap = await getUserRoleMap();
+    const now = new Date();
+    const enrichedRows = rows.map(row => {
+      let activeColor = 'green';
+      const status = row.quotation_status || 'Pending';
+      const stage = determineStage(row.assignee, roleMap);
+
+      if (['Won', 'Lost', 'Approved'].includes(status)) {
+        activeColor = 'green';
+      } else if (status === 'Revision') {
+        // Revision + Estimation assignee: always GREEN (fresh restart, Khushali working on it)
+        // Revision + Sales assignee: clock-based from sales_assigned_at (24h → yellow, 48h → red)
+        if (stage === 'Estimation') {
+          activeColor = 'green';
+        } else {
+          const startTime = row.sales_assigned_at;
+          if (startTime) {
+            const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+            if (elapsed >= RED_HOURS) activeColor = 'red';
+            else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+            else activeColor = 'green';
+          } else {
+            activeColor = 'green';
+          }
+        }
+      } else if (status === 'Pending') {
+        // Pending: Estimation clock from won_at, Sales clock from sales_assigned_at
+        let startTime = null;
+        if (stage === 'Estimation') {
+          startTime = row.won_at;
+        } else {
+          startTime = row.sales_assigned_at;
+        }
+
+        if (startTime) {
+          const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+          if (elapsed >= RED_HOURS) activeColor = 'red';
+          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          else activeColor = 'green';
+        } else {
+          activeColor = 'green';
+        }
+      } else if (status === 'Sent') {
+        let startTime = null;
+        if (row.follow_up_date) {
+          const fuDate = new Date(row.follow_up_date);
+          fuDate.setHours(0, 0, 0, 0);
+          if (now > fuDate) {
+            startTime = fuDate;
+          }
+        } else {
+          startTime = row.updated_at || row.sales_assigned_at;
+        }
+
+        if (startTime) {
+          const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+          if (elapsed >= RED_HOURS) activeColor = 'red';
+          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          else activeColor = 'green';
+        } else {
+          activeColor = 'green';
+        }
+      }
+      return { ...row, quotation_dot_color: activeColor };
+    });
+
+    // Fetch worst-case logged status color ONLY for completed stages
+    // Active stages (Pending/Sent/Revision) show fresh active clock - no log inheritance
+    for (const row of enrichedRows) {
+      if (!['Won', 'Lost', 'Approved'].includes(row.quotation_status)) continue;
+      try {
+        const [logRows] = await db.promise().query(
+          `SELECT status_color FROM quotation_traffic_light_log 
+           WHERE lead_id = ? 
+           ORDER BY created_at DESC 
+           LIMIT 1`,
+          [row.lead_id]
+        );
+        if (logRows.length > 0) {
+          const loggedColor = logRows[0].status_color;
+          const activeColor = row.quotation_dot_color || 'green';
+          let finalColor = 'green';
+          if (activeColor === 'red' || loggedColor === 'red') finalColor = 'red';
+          else if (activeColor === 'yellow' || loggedColor === 'yellow') finalColor = 'yellow';
+          row.quotation_dot_color = finalColor;
+        }
+      } catch(e) { /* ignore */ }
+    }
+
+    res.json({ success: true, result: enrichedRows });
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -560,6 +753,16 @@ router.post(
         }
       }
 
+      
+      const roleMap = await getUserRoleMap();
+      const stage = determineStage(assignee, roleMap);
+      let salesAssignedAt = null;
+      let estimationAssignedAt = null;
+      if (stage === 'Sales') {
+        salesAssignedAt = new Date();
+      } else {
+        estimationAssignedAt = new Date();
+      }
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -582,9 +785,11 @@ router.post(
           activity_type,
           updated_by,
           assignee_log,
-          updated_at
+          updated_at,
+          sales_assigned_at,
+          estimation_assigned_at
          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
         [
           lead_id || null,
           company_name || null,
@@ -605,10 +810,17 @@ router.post(
           activity_type || null,
           updatedBy,
           assigneeLog.length > 0 ? JSON.stringify(assigneeLog) : null,
+          salesAssignedAt,
+          estimationAssignedAt,
         ],
       );
 
       const quotationId = result.insertId;
+
+      // Log Estimation Traffic Light: only if phase is completed (i.e. assigned to Sales)
+      if (stage === 'Sales') {
+        await logQuotationTrafficLight(lead_id, quotationId, 'Estimation', req.user?.name || updatedBy);
+      }
 
       if (quotation_status === "Revision" && lead_id) {
         await db.promise().query(
@@ -730,7 +942,11 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         q.updated_at,
         q.created_at as quotation_created_at,
         q_first.first_quotation_date,
-        IF(q_approved.approved_count > 0, 1, 0) AS has_approved
+        IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
+        l.won_at,
+          q.sales_assigned_at,
+          q.estimation_assigned_at,
+          q.estimation_assigned_at
       FROM lead l
       LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
       LEFT JOIN (
@@ -809,7 +1025,98 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
     sql += " ORDER BY l.lead_id DESC";
 
     const [rows] = await db.promise().query(sql, values);
-    res.json({ success: true, data: rows });
+
+        // Compute quotation_dot_color for each row
+    const roleMap = await getUserRoleMap();
+    const now = new Date();
+    const enrichedRows = rows.map(row => {
+      let activeColor = 'green';
+      const status = row.quotation_status || 'Pending';
+      const stage = determineStage(row.assignee, roleMap);
+
+      if (['Won', 'Lost', 'Approved'].includes(status)) {
+        activeColor = 'green';
+      } else if (status === 'Revision') {
+        // Revision + Estimation assignee: always GREEN (fresh restart, Khushali working on it)
+        // Revision + Sales assignee: clock-based from sales_assigned_at (24h → yellow, 48h → red)
+        if (stage === 'Estimation') {
+          activeColor = 'green';
+        } else {
+          const startTime = row.sales_assigned_at;
+          if (startTime) {
+            const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+            if (elapsed >= RED_HOURS) activeColor = 'red';
+            else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+            else activeColor = 'green';
+          } else {
+            activeColor = 'green';
+          }
+        }
+      } else if (status === 'Pending') {
+        // Pending: Estimation clock from won_at, Sales clock from sales_assigned_at
+        let startTime = null;
+        if (stage === 'Estimation') {
+          startTime = row.won_at;
+        } else {
+          startTime = row.sales_assigned_at;
+        }
+
+        if (startTime) {
+          const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+          if (elapsed >= RED_HOURS) activeColor = 'red';
+          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          else activeColor = 'green';
+        } else {
+          activeColor = 'green';
+        }
+      } else if (status === 'Sent') {
+        let startTime = null;
+        if (row.follow_up_date) {
+          const fuDate = new Date(row.follow_up_date);
+          fuDate.setHours(0, 0, 0, 0);
+          if (now > fuDate) {
+            startTime = fuDate;
+          }
+        } else {
+          startTime = row.updated_at || row.sales_assigned_at;
+        }
+
+        if (startTime) {
+          const elapsed = (now - new Date(startTime)) / (1000 * 3600);
+          if (elapsed >= RED_HOURS) activeColor = 'red';
+          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          else activeColor = 'green';
+        } else {
+          activeColor = 'green';
+        }
+      }
+      return { ...row, quotation_dot_color: activeColor };
+    });
+
+    // Fetch worst-case logged status color ONLY for completed stages
+    // Active stages (Pending/Sent/Revision) show fresh active clock - no log inheritance
+    for (const row of enrichedRows) {
+      if (!['Won', 'Lost', 'Approved'].includes(row.quotation_status)) continue;
+      try {
+        const [logRows] = await db.promise().query(
+          `SELECT status_color FROM quotation_traffic_light_log 
+           WHERE lead_id = ? 
+           ORDER BY created_at DESC 
+           LIMIT 1`,
+          [row.lead_id]
+        );
+        if (logRows.length > 0) {
+          const loggedColor = logRows[0].status_color;
+          const activeColor = row.quotation_dot_color || 'green';
+          let finalColor = 'green';
+          if (activeColor === 'red' || loggedColor === 'red') finalColor = 'red';
+          else if (activeColor === 'yellow' || loggedColor === 'yellow') finalColor = 'yellow';
+          row.quotation_dot_color = finalColor;
+        }
+      } catch(e) { /* ignore */ }
+    }
+
+    res.json({ success: true, data: enrichedRows });
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -1096,7 +1403,8 @@ router.put(
                updated_by=?,
                updated_at=CURRENT_TIMESTAMP,
                assignee_log=?,
-               quotation_status=?
+               quotation_status=?,
+               sales_assigned_at=NOW()
            WHERE id=?`,
           [assignee, updatedBy, JSON.stringify(logs), nextStatus, quotationId],
         );
@@ -1209,6 +1517,14 @@ router.put(
             ],
           );
         }
+      }
+
+      // Log traffic light for the role that just completed their task
+      const assignerRole = req.user?.role || '';
+      if (assignerRole === 'Estimation') {
+        await logQuotationTrafficLight(lead_id, quotationId, 'Estimation', req.user?.name || updatedBy);
+      } else if (assignerRole === 'Sales') {
+        await logQuotationTrafficLight(lead_id, quotationId, 'Sales', req.user?.name || updatedBy);
       }
 
       res.json({
@@ -1330,6 +1646,9 @@ router.put(
             files: [],
           });
 
+          // Log completed Sales phase BEFORE reassigning to PI user
+          await logQuotationTrafficLight(leadId, parseInt(req.params.id), 'Sales', currentAssignee || updatedBy);
+
           // Update quotation assignee, assignee_log, status to Approved
           await db
             .promise()
@@ -1427,10 +1746,13 @@ router.put(
             files: [],
           });
 
+          // Log completed Sales phase BEFORE sending back to Estimation
+          await logQuotationTrafficLight(leadId, parseInt(req.params.id), 'Sales', currentAssignee || updatedBy);
+
           await db
             .promise()
             .query(
-              "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ? WHERE id = ?",
+              "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ?, estimation_assigned_at = NOW(), sales_assigned_at = NULL WHERE id = ?",
               [estUser, JSON.stringify(logs), quotation_status, req.params.id],
             );
 
@@ -1450,7 +1772,26 @@ router.put(
             quotation_status,
             req.params.id,
           ]);
+
+        // Log Sales phase when status becomes Sent, Won, or Lost
+        if (['Sent', 'Won', 'Lost'].includes(quotation_status)) {
+          try {
+            const [qInfo] = await db.promise().query(
+              'SELECT lead_id, assignee FROM quotation WHERE id = ?',
+              [req.params.id]
+            );
+            if (qInfo.length > 0) {
+              await logQuotationTrafficLight(
+                qInfo[0].lead_id,
+                parseInt(req.params.id),
+                'Sales',
+                qInfo[0].assignee || updatedBy
+              );
+            }
+          } catch(e) { console.error('Traffic light log error (status update):', e); }
+        }
       }
+
 
       res.json({ success: true, message: "Status updated successfully" });
     } catch (err) {

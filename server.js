@@ -1,6 +1,9 @@
-const express = require("express");
+﻿const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+// Set Node.js timezone from .env (TZ=Asia/Kolkata) - fixes TIMESTAMPDIFF alignment
+if (process.env.TZ) process.env.TZ = process.env.TZ;
+
 const loginRoutes = require("./routes/loginRoutes");
 const todoRoutes = require("./routes/todos")
 const customerRoutes = require("./routes/customers")
