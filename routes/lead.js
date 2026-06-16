@@ -14,7 +14,6 @@ const RED_HOURS    = parseFloat(process.env.RED_HOURS)    || 48;
 router.get("/read", authenticateAndAuthorize(), (req, res) => {
   const loggedInRole = req.user.role;
 
-  // Fetch full name dynamically using req.user.id
   db.query("SELECT name FROM users WHERE id = ?", [req.user.id], (err, uRows) => {
     let loggedInUser = req.user.username;
     if (!err && uRows && uRows.length > 0) {
@@ -26,6 +25,7 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     l.lead_id,
     l.company_name,
     l.customer_name,
+    l.mobile_no,
     l.reference,
     COALESCE(ls.name, l.source) AS source,
     l.assignee,
@@ -69,7 +69,6 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
 
     let values = [];
 
-    // ✅ Admin, Leads Management, Sales & Estimation sees all leads
     if (
       loggedInRole !== "Admin" &&
       loggedInRole !== "Super Admin" &&
@@ -80,7 +79,6 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       sql += `
         WHERE (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)
       `;
-
       values.push(loggedInUser, loggedInUser);
     }
 
@@ -89,20 +87,13 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     db.query(sql, values, (err, result) => {
       if (err) {
         console.log(err);
-
-        return res.status(500).json({
-          success: false,
-          error: err,
-        });
+        return res.status(500).json({ success: false, error: err });
       }
-
-      res.json({
-        success: true,
-        result,
-      });
+      res.json({ success: true, result });
     });
   });
 });
+
 /* =====================================
    GET ALL LEADS (sales route)
 ===================================== */
@@ -115,6 +106,7 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.lead_id,
       l.company_name,
       l.customer_name,
+      l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
       l.priority,
@@ -126,16 +118,13 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.updated_by,
       l.updated_at
     FROM lead l
-    LEFT JOIN inquiry_lead_source ls
-      ON ls.id = l.source
-    LEFT JOIN inquiry_lead_category lc
-      ON lc.id = l.category
+    LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
+    LEFT JOIN inquiry_lead_category lc ON lc.id = l.category
     WHERE 1=1
   `;
 
   let values = [];
 
-  // ✅ Admin, Leads Management, Sales & Estimation sees all leads
   if (
     loggedInRole !== "Admin" &&
     loggedInRole !== "Super Admin" &&
@@ -151,35 +140,24 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
 
   db.query(sql, values, (err, result) => {
     if (err) {
-      return res.status(500).json({
-        success: false,
-        error: err,
-      });
+      return res.status(500).json({ success: false, error: err });
     }
-
-    res.json({
-      success: true,
-      count: result.length,
-      data: result,
-    });
+    res.json({ success: true, count: result.length, data: result });
   });
 });
 
 /* =====================================
    VIEW SINGLE LEAD DETAILS (for View Modal)
-   ✅ FIXED: product_master JOIN consistent with /sales/leads
 ===================================== */
-router.get(
-  "/sales/leads/view-details/:id",
-  authenticateAndAuthorize(),
-  (req, res) => {
-    const id = req.params.id;
+router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, res) => {
+  const id = req.params.id;
 
-    const sql = `
+  const sql = `
     SELECT
       l.lead_id,
       l.company_name,
       l.customer_name,
+      l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
       l.priority,
@@ -191,51 +169,36 @@ router.get(
       l.updated_by,
       l.updated_at
     FROM lead l
-    LEFT JOIN inquiry_lead_source ls
-      ON ls.id = l.source
-    LEFT JOIN inquiry_lead_category lc
-      ON lc.id = l.category
+    LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
+    LEFT JOIN inquiry_lead_category lc ON lc.id = l.category
     WHERE l.lead_id = ?
   `;
 
-    db.query(sql, [id], (err, result) => {
-      if (err) {
-        console.log(err);
-        return res.status(500).json({
-          success: false,
-          error: err,
-        });
-      }
-
-      if (!result || result.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Lead not found",
-        });
-      }
-
-      res.json({
-        success: true,
-        lead: result[0],
-      });
-    });
-  },
-);
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      console.log(err);
+      return res.status(500).json({ success: false, error: err });
+    }
+    if (!result || result.length === 0) {
+      return res.status(404).json({ success: false, message: "Lead not found" });
+    }
+    res.json({ success: true, lead: result[0] });
+  });
+});
 
 /* =====================================
    VIEW SINGLE LEAD (for Edit page)
+   ✅ FIXED: removed double comma after l.mobile_no
 ===================================== */
-router.get(
-  "/sales/leads/view-leads/:id",
-  authenticateAndAuthorize(),
-  (req, res) => {
-    const id = req.params.id;
+router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res) => {
+  const id = req.params.id;
 
-    const sql = `
+  const sql = `
     SELECT
       l.lead_id,
       l.company_name,
       l.customer_name,
+      l.mobile_no,
       l.reference,
       l.source,
       l.priority,
@@ -248,28 +211,16 @@ router.get(
     WHERE l.lead_id = ?
   `;
 
-    db.query(sql, [id], (err, result) => {
-      if (err) {
-        return res.status(500).json({
-          success: false,
-          error: err,
-        });
-      }
-
-      if (!result || result.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Lead not found",
-        });
-      }
-
-      res.json({
-        success: true,
-        lead: result[0],
-      });
-    });
-  },
-);
+  db.query(sql, [id], (err, result) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err });
+    }
+    if (!result || result.length === 0) {
+      return res.status(404).json({ success: false, message: "Lead not found" });
+    }
+    res.json({ success: true, lead: result[0] });
+  });
+});
 
 /* =====================================
    UPDATE LEAD
@@ -280,6 +231,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
+    mobile_no,       // ✅ ADDED
     reference,
     source,
     status,
@@ -294,11 +246,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   db.query("SELECT status FROM lead WHERE lead_id = ?", [leadId], (err, rows) => {
     if (err) {
       console.error(err);
-      return res.status(500).json({
-        success: false,
-        message: "Database error",
-        error: err,
-      });
+      return res.status(500).json({ success: false, message: "Database error", error: err });
     }
 
     if (
@@ -320,6 +268,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
       SET 
         company_name = ?,
         customer_name = ?,
+        mobile_no = ?,
         reference = ?,
         source = ?,
         status = ?,
@@ -337,6 +286,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
       [
         company_name,
         customer_name,
+        mobile_no || null,   // ✅ ADDED
         reference,
         source,
         status,
@@ -350,27 +300,18 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
       (err, result) => {
         if (err) {
           console.error(err);
-          return res.status(500).json({
-            success: false,
-            message: "Error updating lead",
-            error: err,
-          });
+          return res.status(500).json({ success: false, message: "Error updating lead", error: err });
         }
-
-        res.json({
-          success: true,
-          message: "Lead updated successfully",
-        });
-      },
+        res.json({ success: true, message: "Lead updated successfully" });
+      }
     );
   });
 });
 
 /* =====================================
    ADD NEW LEAD
-   ✅ FIXED: created_by hahu INSERT ma save thay che
-*/
-
+   ✅ FIXED: mobile_no added to INSERT
+===================================== */
 router.post("/insert", authenticateAndAuthorize(), (req, res) => {
   console.log("Incoming lead data:", req.body);
 
@@ -379,6 +320,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
+    mobile_no,       // ✅ ADDED
     reference,
     source,
     status,
@@ -393,6 +335,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     (
       company_name,
       customer_name,
+      mobile_no,
       reference,
       source,
       status,
@@ -402,13 +345,13 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       description,
       created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?)
   `;
 
-  // ✅ FIXED: userName values array ma add karyo
   const values = [
     company_name,
     customer_name,
+    mobile_no || null,   // ✅ ADDED
     reference,
     source || null,
     status,
@@ -416,7 +359,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     assignee,
     category || null,
     description,
-    userName, // ← આ જ missing હતું!
+    userName,
   ];
 
   db.query(sql, values, (err, result) => {
@@ -435,7 +378,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       [activityMsg, userName],
       (actErr) => {
         if (actErr) console.error("Activity log error:", actErr);
-      },
+      }
     );
 
     res.json({
@@ -448,7 +391,6 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
 
 /* =====================================
    UPDATE STATUS ONLY
-   ✅ FIXED: authenticateAndAuthorize() middleware add karyo
 ===================================== */
 router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
   const id = req.params.id;
@@ -458,11 +400,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
   db.query("SELECT status FROM lead WHERE lead_id = ?", [id], (err, rows) => {
     if (err) {
       console.log(err);
-      return res.status(500).json({
-        success: false,
-        message: "Database error",
-        error: err,
-      });
+      return res.status(500).json({ success: false, message: "Database error", error: err });
     }
 
     if (
@@ -583,7 +521,6 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
 
 /* =====================================
    DELETE LEAD (with follow-up cleanup)
-   ✅ FIXED: authenticateAndAuthorize() middleware add karyo
 ===================================== */
 router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
   const leadId = req.params.id;
@@ -591,37 +528,25 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
     await db.promise().query("START TRANSACTION");
 
-    const [lead] = await db
-      .promise()
-      .query("SELECT lead_id FROM lead WHERE lead_id = ?", [leadId]);
-
+    const [lead] = await db.promise().query("SELECT lead_id FROM lead WHERE lead_id = ?", [leadId]);
     if (lead.length === 0) {
       await db.promise().query("ROLLBACK");
       return res.status(404).json({ message: "Lead not found" });
     }
 
-    const [followUps] = await db
-      .promise()
-      .query("SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?", [
-        leadId,
-      ]);
-
+    const [followUps] = await db.promise().query(
+      "SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?", [leadId]
+    );
     const ids = followUps.map((f) => f.follow_up_id);
 
     if (ids.length > 0) {
-      await db
-        .promise()
-        .query("DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)", [
-          ids,
-        ]);
+      await db.promise().query(
+        "DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)", [ids]
+      );
     }
 
-    await db
-      .promise()
-      .query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
-
+    await db.promise().query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
     await db.promise().query("DELETE FROM lead WHERE lead_id = ?", [leadId]);
-
     await db.promise().query("COMMIT");
 
     res.json({ success: true, message: "Lead deleted successfully" });
@@ -634,7 +559,6 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
 
 /* =====================================
    FILTER LEADS
-   ✅ FIXED: single date follow-up filter handle karyo
 ===================================== */
 router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   const {
@@ -658,6 +582,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.lead_id,
       l.company_name,
       l.customer_name,
+      l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
       l.assignee,
@@ -702,43 +627,18 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
 
   let values = [];
 
-  // ✅ Admin & Leads Management sees all leads
   if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
     sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
     values.push(loggedInUser, loggedInUser);
   }
 
-  if (company_name) {
-    sql += " AND l.company_name LIKE ?";
-    values.push(`%${company_name}%`);
-  }
+  if (company_name) { sql += " AND l.company_name LIKE ?"; values.push(`%${company_name}%`); }
+  if (customer_name) { sql += " AND l.customer_name LIKE ?"; values.push(`%${customer_name}%`); }
+  if (reference) { sql += " AND l.reference LIKE ?"; values.push(`%${reference}%`); }
+  if (source) { sql += " AND l.source = ?"; values.push(source); }
+  if (assignee) { sql += " AND FIND_IN_SET(?, l.assignee)"; values.push(assignee); }
+  if (status) { sql += " AND l.status = ?"; values.push(status); }
 
-  if (customer_name) {
-    sql += " AND l.customer_name LIKE ?";
-    values.push(`%${customer_name}%`);
-  }
-
-  if (reference) {
-    sql += " AND l.reference LIKE ?";
-    values.push(`%${reference}%`);
-  }
-
-  if (source) {
-    sql += " AND l.source = ?";
-    values.push(source);
-  }
-
-  if (assignee) {
-    sql += " AND FIND_IN_SET(?, l.assignee)";
-    values.push(assignee);
-  }
-
-  if (status) {
-    sql += " AND l.status = ?";
-    values.push(status);
-  }
-
-  // ✅ FIXED: created date - single ya range banne handle thay
   if (from_created && to_created) {
     sql += " AND DATE(l.created_at) BETWEEN ? AND ?";
     values.push(from_created, to_created);
@@ -750,38 +650,22 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     values.push(to_created);
   }
 
-  // ✅ FIXED: follow-up date - single ya range banne handle thay
   if (from_followup && to_followup) {
     sql += `
-      AND (
-        SELECT f.follow_up_date
-        FROM lead_follow_up f
-        WHERE f.lead_id = l.lead_id
-        ORDER BY f.follow_up_date DESC
-        LIMIT 1
-      ) BETWEEN ? AND ?
+      AND (SELECT f.follow_up_date FROM lead_follow_up f WHERE f.lead_id = l.lead_id ORDER BY f.follow_up_date DESC LIMIT 1)
+      BETWEEN ? AND ?
     `;
     values.push(from_followup, to_followup);
   } else if (from_followup) {
     sql += `
-      AND (
-        SELECT f.follow_up_date
-        FROM lead_follow_up f
-        WHERE f.lead_id = l.lead_id
-        ORDER BY f.follow_up_date DESC
-        LIMIT 1
-      ) >= ?
+      AND (SELECT f.follow_up_date FROM lead_follow_up f WHERE f.lead_id = l.lead_id ORDER BY f.follow_up_date DESC LIMIT 1)
+      >= ?
     `;
     values.push(from_followup);
   } else if (to_followup) {
     sql += `
-      AND (
-        SELECT f.follow_up_date
-        FROM lead_follow_up f
-        WHERE f.lead_id = l.lead_id
-        ORDER BY f.follow_up_date DESC
-        LIMIT 1
-      ) <= ?
+      AND (SELECT f.follow_up_date FROM lead_follow_up f WHERE f.lead_id = l.lead_id ORDER BY f.follow_up_date DESC LIMIT 1)
+      <= ?
     `;
     values.push(to_followup);
   }
@@ -791,46 +675,9 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   db.query(sql, values, (err, result) => {
     if (err) {
       console.log(err);
-      return res.status(500).json({
-        success: false,
-        error: err,
-      });
+      return res.status(500).json({ success: false, error: err });
     }
-
-    res.json({
-      success: true,
-      data: result,
-    });
-  });
-});
-
-
-// /* =====================================
-//    GET CUSTOMER LIST FOR FILTER
-// ===================================== */
-router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
-  const sql = `
-    SELECT DISTINCT
-      customer_name
-    FROM lead
-    WHERE customer_name IS NOT NULL
-    AND customer_name != ''
-    ORDER BY customer_name ASC
-  `;
-
-  db.query(sql, (err, result) => {
-    if (err) {
-      console.log(err);
-      return res.status(500).json({
-        success: false,
-        error: err,
-      });
-    }
-
-    res.json({
-      success: true,
-      data: result,
-    });
+    res.json({ success: true, data: result });
   });
 });
 
@@ -839,24 +686,22 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
 /* =====================================
    GET CUSTOMER LIST FOR FILTER
 ===================================== */
-// router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
-//   const sql = `
-//     SELECT DISTINCT
-//       customer_name
-//     FROM lead
-//     WHERE customer_name IS NOT NULL
-//     AND customer_name != ''
-//     ORDER BY customer_name ASC
-//   `;
+router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
+  const sql = `
+    SELECT DISTINCT customer_name
+    FROM lead
+    WHERE customer_name IS NOT NULL AND customer_name != ''
+    ORDER BY customer_name ASC
+  `;
 
-//   db.query(sql, (err, result) => {
-//     if (err) {
-//       console.log(err);
-//       return res.status(500).json({
-//         success: false,
-//         error: err,
-//       });
-//     }
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.log(err);
+      return res.status(500).json({ success: false, error: err });
+    }
+    res.json({ success: true, data: result });
+  });
+});
 
 //     res.json({
 //       success: true,
