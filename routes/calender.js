@@ -78,26 +78,38 @@ router.post("/insert-event", authenticateAndAuthorize(), (req, res) => {
 // GET LIST ACTIVITY
 // =======================
 router.get("/list", authenticateAndAuthorize(), (req, res) => {
+  const role = req.user.role;
   let sql;
   let values = [];
 
-  if (req.user.role === "Admin") {
+  // ✅ FIX: assignee field have comma-separated multiple ids rakhi sake ("3,7,12"),
+  // etle simple LEFT JOIN (c.assignee = u.id) kaam nahi kare — GROUP_CONCAT + FIND_IN_SET
+  // subquery vaprine badha assignees na naam ek j string ma joine.
+  const assigneeNameSelect = `
+    (
+      SELECT GROUP_CONCAT(u2.name SEPARATOR ', ')
+      FROM users u2
+      WHERE FIND_IN_SET(u2.id, c.assignee)
+    ) AS assignee_name
+  `;
+
+  if (role === "Admin" || role === "Super Admin") {
+    // ✅ Admin / Super Admin => badha j events dekhay
     sql = `
       SELECT
         c.*,
-        u.name AS assignee_name
+        ${assigneeNameSelect}
       FROM calendar_activities c
-      LEFT JOIN users u ON c.assignee = u.id
       ORDER BY c.activity_date ASC, c.activity_time ASC
     `;
   } else {
+    // ✅ Baki badha roles => fakt jena assignee list ma potani id hoy e j events dekhay
     sql = `
       SELECT
         c.*,
-        u.name AS assignee_name
+        ${assigneeNameSelect}
       FROM calendar_activities c
-      LEFT JOIN users u ON c.assignee = u.id
-      WHERE c.assignee = ?
+      WHERE FIND_IN_SET(?, REPLACE(c.assignee, ', ', ','))
       ORDER BY c.activity_date ASC, c.activity_time ASC
     `;
     values.push(req.user.id);
