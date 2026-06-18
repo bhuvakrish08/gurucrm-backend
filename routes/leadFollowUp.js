@@ -154,6 +154,63 @@ router.post(
         );
       }
 
+      // =============================
+      // 🚦 TRAFFIC LIGHT: Calculate color + log event
+      // =============================
+      try {
+        const YELLOW_HOURS = parseFloat(process.env.YELLOW_HOURS) || 24;
+        const RED_HOURS = parseFloat(process.env.RED_HOURS) || 48;
+
+        // Calculate hours elapsed before this follow-up (using float precision)
+        const [[leadRow]] = await db.promise().query(
+          `SELECT
+             l.assignee,
+             ROUND(
+               TIMESTAMPDIFF(SECOND,
+                 COALESCE(
+                   (SELECT lf.created_at FROM lead_follow_up lf
+                    WHERE lf.lead_id = ? AND lf.follow_up_id != ?
+                    ORDER BY lf.created_at DESC LIMIT 1),
+                   l.created_at
+                 ),
+                 NOW()
+               ) / 3600.0, 5
+             ) AS hours_elapsed
+           FROM \`lead\` l WHERE l.lead_id = ?`,
+          [lead_id, followUpId, lead_id]
+        );
+
+        const hoursElapsed = leadRow ? parseFloat(leadRow.hours_elapsed || 0) : 0;
+        const assigneeVal  = leadRow ? (leadRow.assignee || follow_up_by || null) : (follow_up_by || null);
+
+        let statusColor = "green";
+        if (hoursElapsed >= RED_HOURS) {
+          statusColor = "red";
+        } else if (hoursElapsed >= YELLOW_HOURS) {
+          statusColor = "yellow";
+        }
+
+        // Log the follow-up event (this preserves late performance status)
+        await db.promise().query(
+          `INSERT INTO lead_followup_status_log
+           (lead_id, assignee, status_color, hours_elapsed, trigger_event)
+           VALUES (?, ?, ?, ?, 'follow_up_added')`,
+          [lead_id, assigneeVal, statusColor, hoursElapsed]
+        );
+
+        // Update the stored status on the lead row
+        await db.promise().query(
+          `UPDATE \`lead\`
+           SET followup_status = ?,
+               followup_status_updated_at = NOW()
+           WHERE lead_id = ?`,
+          [statusColor, lead_id]
+        );
+      } catch (logErr) {
+        // Non-fatal: log the error but don't fail the response
+        console.error("Traffic light log error:", logErr);
+      }
+
       res.json({
         success: true,
         message: "Follow-up created with files (Cloudinary) ✅",

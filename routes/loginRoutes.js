@@ -102,9 +102,13 @@ const sendEmail = async (to, otp) => {
     throw new Error("Email sending failed");
   }
 };
+
+
 //////////////////////////////////////////////////////////////////
 // 🔐 LOGIN.
 //////////////////////////////////////////////////////////////////
+
+
 router.post("/login", (req, res) => {
   const { email, password } = req.body;
 

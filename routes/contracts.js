@@ -26,6 +26,8 @@ router.get("/read", (req, res) => {
   });
 });
 
+
+
 // Insert data
 router.post("/insert", (req, res) => {
   const { name, status } = req.body;
