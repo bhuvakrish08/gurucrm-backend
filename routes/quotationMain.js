@@ -306,10 +306,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           FROM quotation q1
           INNER JOIN (
             SELECT lead_id, 
-                   COALESCE(
-                     MAX(CASE WHEN quotation_status IN ('Approved', 'Won', 'Lost') THEN id END), 
-                     MAX(id)
-                   ) as max_id
+                   MAX(id) as max_id
             FROM quotation
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
@@ -368,10 +365,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           FROM quotation q1
           INNER JOIN (
             SELECT lead_id, 
-                   COALESCE(
-                     MAX(CASE WHEN quotation_status IN ('Approved', 'Won', 'Lost') THEN id END), 
-                     MAX(id)
-                   ) as max_id
+                   MAX(id) as max_id
             FROM quotation
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
@@ -506,10 +500,36 @@ router.get("/history/:lead_id", async (req, res) => {
   try {
     const [rows] = await db
       .promise()
-      .query("SELECT * FROM quotation WHERE lead_id = ? ORDER BY id DESC", [
-        req.params.lead_id,
-      ]);
+      .query(
+        `SELECT q.*, 
+                qs.amount_9, qs.amount_18, qs.tax_percent_9, qs.tax_percent_18, qs.tax_9, qs.tax_18, qs.grand_total as split_grand_total
+         FROM quotation q
+         LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
+         WHERE q.lead_id = ? 
+         ORDER BY q.id DESC`,
+        [req.params.lead_id],
+      );
     res.json({ success: true, result: rows });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// =============================
+// GET QUOTATION SPLIT
+// =============================
+router.get("/split/:quotation_id", async (req, res) => {
+  try {
+    const [rows] = await db
+      .promise()
+      .query("SELECT * FROM quotation_splits WHERE quotation_id = ?", [
+        req.params.quotation_id,
+      ]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: "No split found" });
+    }
+    res.json({ success: true, split: rows[0] });
   } catch (err) {
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
@@ -610,6 +630,12 @@ router.post(
         amount,
         description,
         activity_type,
+        amount_9,
+        amount_18,
+        tax_percent_9,
+        tax_percent_18,
+        tax_9,
+        tax_18,
       } = req.body;
 
       const updatedBy =
@@ -708,6 +734,13 @@ router.post(
 
       const parsedFollowUpDate = parseDate(follow_up_date);
       const parsedQuotationDate = parseDate(quotation_date);
+
+      const parsedAmount9 = parseNum(amount_9 || 0);
+      const parsedAmount18 = parseNum(amount_18 || 0);
+      const parsedTaxPercent9 = parseNum(tax_percent_9 !== undefined ? tax_percent_9 : 9);
+      const parsedTaxPercent18 = parseNum(tax_percent_18 !== undefined ? tax_percent_18 : 18);
+      const parsedTax9 = parseNum(tax_9 || 0);
+      const parsedTax18 = parseNum(tax_18 || 0);
 
       let assigneeLog = [];
       if (lead_id) {
@@ -816,6 +849,24 @@ router.post(
       );
 
       const quotationId = result.insertId;
+
+      if (parsedAmount9 > 0 || parsedAmount18 > 0) {
+        await db.promise().query(
+          `INSERT INTO quotation_splits 
+           (quotation_id, amount_9, amount_18, tax_percent_9, tax_percent_18, tax_9, tax_18, grand_total) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            quotationId,
+            parsedAmount9,
+            parsedAmount18,
+            parsedTaxPercent9,
+            parsedTaxPercent18,
+            parsedTax9,
+            parsedTax18,
+            parsedGrandTotal || 0,
+          ]
+        );
+      }
 
       // Log Estimation Traffic Light: only if phase is completed (i.e. assigned to Sales)
       if (stage === 'Sales') {
@@ -954,10 +1005,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         FROM quotation q1
         INNER JOIN (
           SELECT lead_id, 
-                 COALESCE(
-                   MAX(CASE WHEN quotation_status IN ('Approved', 'Won', 'Lost') THEN id END), 
-                   MAX(id)
-                 ) as max_id
+                 MAX(id) as max_id
           FROM quotation
           GROUP BY lead_id
         ) q2 ON q1.id = q2.max_id
@@ -1137,12 +1185,19 @@ router.put(
         quotation_no,
         quotation_date,
         activity_type,
+        quotation_status,
         amount,
         discount,
         tax,
         grand_total,
         description,
         assignee,
+        amount_9,
+        amount_18,
+        tax_percent_9,
+        tax_percent_18,
+        tax_9,
+        tax_18,
       } = req.body;
 
       const updatedBy =
@@ -1201,6 +1256,12 @@ router.put(
       const parsedTax = parseNum(tax);
       const parsedGrandTotal = parseNum(grand_total);
       const parsedQuotationDate = parseDate(quotation_date);
+      const parsedAmount9 = parseNum(amount_9 || 0);
+      const parsedAmount18 = parseNum(amount_18 || 0);
+      const parsedTaxPercent9 = parseNum(tax_percent_9 !== undefined ? tax_percent_9 : 9);
+      const parsedTaxPercent18 = parseNum(tax_percent_18 !== undefined ? tax_percent_18 : 18);
+      const parsedTax9 = parseNum(tax_9 || 0);
+      const parsedTax18 = parseNum(tax_18 || 0);
 
       await db.promise().query(
         `UPDATE quotation SET 
@@ -1222,16 +1283,60 @@ router.put(
           quotation_no || null,
           parsedQuotationDate,
           activity_type || null,
+          quotation_status || "Pending",
           parsedAmount,
           parsedDiscount,
           parsedTax,
           parsedGrandTotal,
           description || null,
           assignee || null,
+          null, // for assignee_log
           updatedBy,
           req.params.id,
         ],
       );
+
+      // Handle split details insertion or update
+      if (parsedAmount9 > 0 || parsedAmount18 > 0) {
+        const [existingSplit] = await db.promise().query(
+          "SELECT id FROM quotation_splits WHERE quotation_id = ?",
+          [req.params.id]
+        );
+
+        if (existingSplit.length > 0) {
+          await db.promise().query(
+            `UPDATE quotation_splits SET 
+             amount_9 = ?, amount_18 = ?, tax_percent_9 = ?, tax_percent_18 = ?, tax_9 = ?, tax_18 = ?, grand_total = ?
+             WHERE quotation_id = ?`,
+            [
+              parsedAmount9,
+              parsedAmount18,
+              parsedTaxPercent9,
+              parsedTaxPercent18,
+              parsedTax9,
+              parsedTax18,
+              parsedGrandTotal || 0,
+              req.params.id,
+            ]
+          );
+        } else {
+          await db.promise().query(
+            `INSERT INTO quotation_splits 
+             (quotation_id, amount_9, amount_18, tax_percent_9, tax_percent_18, tax_9, tax_18, grand_total) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              req.params.id,
+              parsedAmount9,
+              parsedAmount18,
+              parsedTaxPercent9,
+              parsedTaxPercent18,
+              parsedTax9,
+              parsedTax18,
+              parsedGrandTotal || 0,
+            ]
+          );
+        }
+      }
 
       try {
         const userName =
@@ -1944,10 +2049,19 @@ router.get(
             SELECT COUNT(*)
             FROM quotation q2
             WHERE q2.lead_id = q.lead_id
-          ) as total_quotations
+          ) as total_quotations,
+
+          qs.amount_9,
+          qs.amount_18,
+          qs.tax_percent_9,
+          qs.tax_percent_18,
+          qs.tax_9,
+          qs.tax_18,
+          qs.grand_total as split_grand_total
 
         FROM quotation q
         LEFT JOIN lead l ON l.lead_id = q.lead_id
+        LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
         WHERE q.id = ?
         `,
         [quotation_id],
