@@ -9,6 +9,7 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  dateStrings: true, // ✅ FIX: DATE/DATETIME columns string tarike aave, JS Date object nahi (timezone shift band)
 });
 
 // Test connection
