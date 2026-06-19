@@ -1754,7 +1754,12 @@ router.put(
           });
 
           // Log completed Sales phase BEFORE reassigning to PI user
-          await logQuotationTrafficLight(leadId, parseInt(req.params.id), 'Sales', currentAssignee || updatedBy);
+          await logQuotationTrafficLight(
+            leadId,
+            parseInt(req.params.id),
+            "Sales",
+            currentAssignee || updatedBy,
+          );
 
           // Update quotation assignee, assignee_log, status to Approved
           await db
@@ -1854,7 +1859,12 @@ router.put(
           });
 
           // Log completed Sales phase BEFORE sending back to Estimation
-          await logQuotationTrafficLight(leadId, parseInt(req.params.id), 'Sales', currentAssignee || updatedBy);
+          await logQuotationTrafficLight(
+            leadId,
+            parseInt(req.params.id),
+            "Sales",
+            currentAssignee || updatedBy,
+          );
 
           await db
             .promise()
@@ -1879,23 +1889,93 @@ router.put(
             quotation_status,
             req.params.id,
           ]);
+        // When Status = Won
+        if (
+  quotation_status &&
+  quotation_status.trim().toLowerCase() === "won"
+) {
+          // Get Quotation Details
+          const [quotationRows] = await db.promise().query(
+            `SELECT
+          id,
+          company_name,
+          customer_name,
+          reference,
+          source,
+          quotation_no,
+          quotation_date,
+          grand_total
+       FROM quotation
+       WHERE id = ?`,
+            [req.params.id],
+          );
+
+          if (quotationRows.length > 0) {
+            const quotation = quotationRows[0];
+
+            // Check Project Already Exists
+            const [projectRows] = await db.promise().query(
+              `SELECT id
+         FROM project
+         WHERE quotation_id = ?`,
+              [quotation.id],
+            );
+
+            if (projectRows.length === 0) {
+              await db.promise().query(
+                `INSERT INTO project (
+              quotation_id,
+              company_name,
+              customer_name,
+              reference,
+              source,
+              quotation_no,
+              quotation_date,
+              grand_total,
+              architecture_net_amount,
+              expense_net_amount,
+              net_revenue_amount
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  quotation.id,
+                  quotation.company_name,
+                  quotation.customer_name,
+                  quotation.reference,
+                  quotation.source,
+                  quotation.quotation_no,
+                  quotation.quotation_date,
+                  quotation.grand_total,
+                  0,
+                  0,
+                  0,
+                ],
+              );
+
+              console.log("Project Created Successfully");
+            }
+          }
+        }
 
         // Log Sales phase when status becomes Sent, Won, or Lost
-        if (['Sent', 'Won', 'Lost'].includes(quotation_status)) {
+        if (["Sent", "Won", "Lost"].includes(quotation_status)) {
           try {
-            const [qInfo] = await db.promise().query(
-              'SELECT lead_id, assignee FROM quotation WHERE id = ?',
-              [req.params.id]
-            );
+            const [qInfo] = await db
+              .promise()
+              .query("SELECT lead_id, assignee FROM quotation WHERE id = ?", [
+                req.params.id,
+              ]);
             if (qInfo.length > 0) {
               await logQuotationTrafficLight(
                 qInfo[0].lead_id,
                 parseInt(req.params.id),
-                'Sales',
-                qInfo[0].assignee || updatedBy
+                "Sales",
+                qInfo[0].assignee || updatedBy,
               );
             }
-          } catch(e) { console.error('Traffic light log error (status update):', e); }
+          } catch (e) {
+            console.error("Traffic light log error (status update):", e);
+          }
         }
       }
 
