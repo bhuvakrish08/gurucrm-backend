@@ -39,6 +39,7 @@ const pi = require('./routes/perfomainvoices')
 const activitiesRoutes = require('./routes/activities');
 const quotationRevisionRoutes = require("./routes/quotationRevision");
 const calendarRoutes = require("./routes/calender");
+const Architectroutes = require("./routes/Architectroutes");
 
 
 
@@ -83,6 +84,7 @@ app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/api/quotation-revision", quotationRevisionRoutes);
 app.use("/api/calendar", calendarRoutes);
+app.use("/api/architect",Architectroutes);
 
 
 
