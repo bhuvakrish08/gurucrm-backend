@@ -40,6 +40,9 @@ const activitiesRoutes = require('./routes/activities');
 const quotationRevisionRoutes = require("./routes/quotationRevision");
 const calendarRoutes = require("./routes/calender");
 const Architectroutes = require("./routes/Architectroutes");
+const projectRoutes = require("./routes/projectRoutes");
+
+
 
 
 
@@ -88,8 +91,7 @@ app.use("/api/activities", activitiesRoutes);
 app.use("/api/quotation-revision", quotationRevisionRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/architect",Architectroutes);
-
-
+app.use("/api/project", projectRoutes);
 
 
 
