@@ -15,9 +15,11 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
 
   try {
     const [quotation] = await db.promise().query(
-      `SELECT * FROM quotation 
-       WHERE id = ? 
-       AND quotation_status IN ('Won', 'Approved')`,
+      `SELECT q.*, COALESCE(qs.grand_total, q.grand_total) AS grand_total
+       FROM quotation q
+       LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
+       WHERE q.id = ? 
+       AND q.quotation_status IN ('Won', 'Approved')`,
       [quotation_id],
     );
 

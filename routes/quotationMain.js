@@ -1684,15 +1684,17 @@ router.put(
       if (quotation_status === "Approved") {
         const [qRow] = await db.promise().query(
           `SELECT 
-          lead_id, 
-          assignee, 
-          customer_name, 
-          quotation_no, 
-          grand_total, 
-          assignee_log,
-          source,
-          reference
-         FROM quotation WHERE id = ?`,
+            q.lead_id, 
+            q.assignee, 
+            q.customer_name, 
+            q.quotation_no, 
+            COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
+            q.assignee_log,
+            q.source,
+            q.reference
+          FROM quotation q
+          LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
+          WHERE q.id = ?`,
           [req.params.id],
         );
 
