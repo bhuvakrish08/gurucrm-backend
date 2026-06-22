@@ -1655,337 +1655,340 @@ router.put(
 //    - reference હવે સાચા 'reference' slot પર insert થાય છે
 // =============================
 
-router.put(
-  "/update-status/:id",
-  authenticateAndAuthorize(),
-  async (req, res) => {
-    try {
-      const { quotation_status } = req.body;
-      const updatedBy =
-        req.user?.username || req.user?.name || req.user?.email || "Unknown";
+// =============================
+// UPDATE STATUS
+// ✅ FIXED: Approved block માં project insert add કર્યો
+// ✅ FIXED: Won block પણ project insert સાથે કામ કરે છે
+// =============================
 
-      const isKhushaliEstimation =
-        req.user?.role === "Estimation" &&
-        req.user?.username?.toLowerCase().startsWith("khushali");
+router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) => {
+  try {
+    const { quotation_status } = req.body;
+    const updatedBy =
+      req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
-      if (
-        isKhushaliEstimation &&
-        (quotation_status === "Approved" || quotation_status === "Declined")
-      ) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message:
-              "Estimation users are not authorized to approve or decline quotations.",
-          });
-      }
+    const isKhushaliEstimation =
+      req.user?.role === "Estimation" &&
+      req.user?.username?.toLowerCase().startsWith("khushali");
 
-      if (quotation_status === "Approved") {
-        const [qRow] = await db.promise().query(
-          `SELECT 
-            q.lead_id, 
-            q.assignee, 
-            q.customer_name, 
-            q.quotation_no, 
-            COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
-            q.assignee_log,
-            q.source,
-            q.reference
-          FROM quotation q
-          LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
-          WHERE q.id = ?`,
+    if (
+      isKhushaliEstimation &&
+      (quotation_status === "Approved" || quotation_status === "Declined")
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Estimation users are not authorized to approve or decline quotations.",
+      });
+    }
+
+    // ============================================================
+    // ✅ APPROVED BLOCK
+    // ============================================================
+    if (quotation_status === "Approved") {
+      const [qRow] = await db.promise().query(
+        `SELECT 
+          q.lead_id, 
+          q.assignee, 
+          q.customer_name, 
+          q.quotation_no,
+          q.company_name,
+          q.reference,
+          q.source,
+          q.quotation_date,
+          COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
+          q.assignee_log
+        FROM quotation q
+        LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
+        WHERE q.id = ?`,
+        [req.params.id],
+      );
+
+      if (qRow.length > 0) {
+        const leadId        = qRow[0].lead_id;
+        const currentAssignee = qRow[0].assignee || "";
+        const customerName  = qRow[0].customer_name || null;
+        const quotationNo   = qRow[0].quotation_no || null;
+        const grandTotal    = qRow[0].grand_total || 0;
+        const source        = qRow[0].source || null;
+        const reference     = qRow[0].reference || null;
+        const companyName   = qRow[0].company_name || null;
+        const quotationDate = qRow[0].quotation_date || null;
+
+        // Decline other quotations for this lead
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE quotation SET quotation_status = 'Declined' WHERE lead_id = ? AND id != ?",
+            [leadId, req.params.id],
+          );
+        }
+
+        // Find Proforma Invoice user
+        let piUser = req.body.assigned_pi_user;
+        if (piUser) {
+          piUser = piUser.split(" ")[0];
+        } else {
+          const [piUsers] = await db.promise().query(
+            "SELECT name FROM users WHERE role = 'Proforma invoices' LIMIT 1",
+          );
+          piUser =
+            piUsers.length > 0
+              ? piUsers[0].name
+                ? piUsers[0].name.split(" ")[0]
+                : "Vruta"
+              : "Vruta";
+        }
+
+        // Parse assignee log
+        let logs = [];
+        try {
+          logs = qRow[0].assignee_log ? JSON.parse(qRow[0].assignee_log) : [];
+          if (!Array.isArray(logs)) logs = [];
+        } catch {
+          logs = [];
+        }
+
+        logs.push({
+          previous_assignee: currentAssignee,
+          new_assignee: piUser,
+          changed_by: updatedBy,
+          changed_at: new Date().toISOString(),
+          description: null,
+          files: [],
+        });
+
+        // Log completed Sales phase BEFORE reassigning to PI user
+        await logQuotationTrafficLight(
+          leadId,
+          parseInt(req.params.id),
+          "Sales",
+          currentAssignee || updatedBy,
+        );
+
+        // Update quotation → Approved + new assignee
+        await db.promise().query(
+          "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = 'Approved' WHERE id = ?",
+          [piUser, JSON.stringify(logs), req.params.id],
+        );
+
+        // Create Proforma Invoice if not exists
+        const [existingPI] = await db.promise().query(
+          "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
           [req.params.id],
         );
 
-        if (qRow.length > 0) {
-          const leadId = qRow[0].lead_id;
-          const currentAssignee = qRow[0].assignee || "";
-          const customerName = qRow[0].customer_name || null;
-          const quotationNo = qRow[0].quotation_no || null;
-          const grandTotal = qRow[0].grand_total || 0;
-          const source = qRow[0].source || null;
-          const reference = qRow[0].reference || null;
+        if (existingPI.length === 0) {
+          const piNo = quotationNo ? `PI-${quotationNo}` : `PI-${Date.now()}`;
 
-          // Decline other quotations for this lead
-          if (leadId) {
-            await db
-              .promise()
-              .query(
-                "UPDATE quotation SET quotation_status = 'Declined' WHERE lead_id = ? AND id != ?",
-                [leadId, req.params.id],
-              );
-          }
+          await db.promise().query(
+            `INSERT INTO proforma_invoices 
+              (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, source, reference, total, proforma_percentage, status)
+              VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, 0.00, 'draft')`,
+            [
+              req.params.id,
+              piNo,
+              customerName,
+              quotationNo,
+              piUser,
+              source,
+              reference,
+              grandTotal,
+            ],
+          );
+        }
 
-          // Find or assign user with Proforma invoices role
-          let piUser = req.body.assigned_pi_user;
-          if (piUser) {
-            piUser = piUser.split(" ")[0];
-          } else {
-            const [piUsers] = await db
-              .promise()
-              .query(
-                "SELECT name FROM users WHERE role = 'Proforma invoices' LIMIT 1",
-              );
-            piUser =
-              piUsers.length > 0
-                ? piUsers[0].name
-                  ? piUsers[0].name.split(" ")[0]
-                  : "Vruta"
-                : "Vruta";
-          }
+        // Update lead → Won + assignee = piUser
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE `lead` SET status = 'Won', assignee = ? WHERE lead_id = ?",
+            [piUser, leadId],
+          );
+        }
 
-          // Parse assignee log
-          let logs = [];
-          try {
-            logs = qRow[0].assignee_log ? JSON.parse(qRow[0].assignee_log) : [];
-            if (!Array.isArray(logs)) logs = [];
-          } catch {
-            logs = [];
-          }
-
-          logs.push({
-            previous_assignee: currentAssignee,
-            new_assignee: piUser,
-            changed_by: updatedBy,
-            changed_at: new Date().toISOString(),
-            description: null,
-            files: [],
-          });
-
-          // Log completed Sales phase BEFORE reassigning to PI user
-          await logQuotationTrafficLight(
-            leadId,
-            parseInt(req.params.id),
-            "Sales",
-            currentAssignee || updatedBy,
+        // ✅ PROJECT TABLE INSERT — Approved ત્યારે project create કર
+        if (leadId) {
+          const [existingProject] = await db.promise().query(
+            "SELECT id FROM project WHERE quotation_id = ?",
+            [req.params.id],
           );
 
-          // Update quotation assignee, assignee_log, status to Approved
-          await db
-            .promise()
-            .query(
-              "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = 'Approved' WHERE id = ?",
-              [piUser, JSON.stringify(logs), req.params.id],
-            );
-
-          const [existingPI] = await db
-            .promise()
-            .query(
-              "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
-              [req.params.id],
-            );
-
-          if (existingPI.length === 0) {
-            const piNo = quotationNo ? `PI-${quotationNo}` : `PI-${Date.now()}`;
-
-            // ✅ FIXED: pi_date CURRENT_DATE hardcoded, so VALUES array exactly 9 items
+          if (existingProject.length === 0) {
             await db.promise().query(
-              `INSERT INTO proforma_invoices 
-   (
-     quotation_id, 
-     pi_no, 
-     pi_date, 
-     customer_name, 
-     quotation_no, 
-     assignee, 
-     source,
-     reference,
-     total, 
-     proforma_percentage, 
-     status
-   )
-   VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, 0.00, 'draft')`,
+              `INSERT INTO project (
+                quotation_id,
+                company_name,
+                customer_name,
+                reference,
+                source,
+                quotation_no,
+                quotation_date,
+                grand_total,
+                architecture_net_amount,
+                expense_net_amount,
+                net_revenue_amount
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
-                req.params.id, // 1. quotation_id
-                piNo, // 2. pi_no
-                // CURRENT_DATE hardcoded — no ? needed
-                customerName, // 3. customer_name
-                quotationNo, // 4. quotation_no
-                piUser, // 5. assignee
-                source, // 6. source
-                reference, // 7. reference  ✅ correct slot
-                grandTotal, // 8. total      ✅ now correct!
-                // 0.00 hardcoded
-                // 'draft' hardcoded
+                req.params.id,
+                companyName,
+                customerName,
+                reference,
+                source,
+                quotationNo,
+                quotationDate,
+                grandTotal,
+                0,
+                0,
+                0,
               ],
             );
-          }
-
-          // Update lead status to Won and assignee to piUser
-          if (leadId) {
-            await db
-              .promise()
-              .query(
-                "UPDATE `lead` SET status = 'Won', assignee = ? WHERE lead_id = ?",
-                [piUser, leadId],
-              );
-          }
-        }
-      } else if (quotation_status === "Revision") {
-        const [qRows] = await db
-          .promise()
-          .query(
-            "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
-            [req.params.id],
-          );
-
-        if (qRows.length > 0) {
-          const leadId = qRows[0].lead_id;
-          const currentAssignee = qRows[0].assignee || "";
-
-          const [estUsers] = await db
-            .promise()
-            .query("SELECT name FROM users WHERE role = 'Estimation' LIMIT 1");
-          const estUser = estUsers.length > 0 ? estUsers[0].name : "Khushali";
-
-          let logs = [];
-          try {
-            logs = qRows[0].assignee_log
-              ? JSON.parse(qRows[0].assignee_log)
-              : [];
-            if (!Array.isArray(logs)) logs = [];
-          } catch {
-            logs = [];
-          }
-
-          logs.push({
-            previous_assignee: currentAssignee,
-            new_assignee: estUser,
-            changed_by: updatedBy,
-            changed_at: new Date().toISOString(),
-            description: null,
-            files: [],
-          });
-
-          // Log completed Sales phase BEFORE sending back to Estimation
-          await logQuotationTrafficLight(
-            leadId,
-            parseInt(req.params.id),
-            "Sales",
-            currentAssignee || updatedBy,
-          );
-
-          await db
-            .promise()
-            .query(
-              "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ?, estimation_assigned_at = NOW(), sales_assigned_at = NULL WHERE id = ?",
-              [estUser, JSON.stringify(logs), quotation_status, req.params.id],
-            );
-
-          if (leadId) {
-            await db
-              .promise()
-              .query("UPDATE `lead` SET assignee = ? WHERE lead_id = ?", [
-                estUser,
-                leadId,
-              ]);
-          }
-        }
-      } else {
-        await db
-          .promise()
-          .query("UPDATE quotation SET quotation_status = ? WHERE id = ?", [
-            quotation_status,
-            req.params.id,
-          ]);
-        // When Status = Won
-        if (
-  quotation_status &&
-  quotation_status.trim().toLowerCase() === "won"
-) {
-          // Get Quotation Details
-          const [quotationRows] = await db.promise().query(
-            `SELECT
-          id,
-          company_name,
-          customer_name,
-          reference,
-          source,
-          quotation_no,
-          quotation_date,
-          grand_total
-       FROM quotation
-       WHERE id = ?`,
-            [req.params.id],
-          );
-
-          if (quotationRows.length > 0) {
-            const quotation = quotationRows[0];
-
-            // Check Project Already Exists
-            const [projectRows] = await db.promise().query(
-              `SELECT id
-         FROM project
-         WHERE quotation_id = ?`,
-              [quotation.id],
-            );
-
-            if (projectRows.length === 0) {
-              await db.promise().query(
-                `INSERT INTO project (
-              quotation_id,
-              company_name,
-              customer_name,
-              reference,
-              source,
-              quotation_no,
-              quotation_date,
-              grand_total,
-              architecture_net_amount,
-              expense_net_amount,
-              net_revenue_amount
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                  quotation.id,
-                  quotation.company_name,
-                  quotation.customer_name,
-                  quotation.reference,
-                  quotation.source,
-                  quotation.quotation_no,
-                  quotation.quotation_date,
-                  quotation.grand_total,
-                  0,
-                  0,
-                  0,
-                ],
-              );
-
-              console.log("Project Created Successfully");
-            }
-          }
-        }
-
-        // Log Sales phase when status becomes Sent, Won, or Lost
-        if (["Sent", "Won", "Lost"].includes(quotation_status)) {
-          try {
-            const [qInfo] = await db
-              .promise()
-              .query("SELECT lead_id, assignee FROM quotation WHERE id = ?", [
-                req.params.id,
-              ]);
-            if (qInfo.length > 0) {
-              await logQuotationTrafficLight(
-                qInfo[0].lead_id,
-                parseInt(req.params.id),
-                "Sales",
-                qInfo[0].assignee || updatedBy,
-              );
-            }
-          } catch (e) {
-            console.error("Traffic light log error (status update):", e);
+            console.log("✅ Project created from Approved quotation:", req.params.id);
+          } else {
+            console.log("ℹ️ Project already exists for quotation:", req.params.id);
           }
         }
       }
 
+    // ============================================================
+    // REVISION BLOCK
+    // ============================================================
+    } else if (quotation_status === "Revision") {
+      const [qRows] = await db.promise().query(
+        "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
+        [req.params.id],
+      );
 
-      res.json({ success: true, message: "Status updated successfully" });
-    } catch (err) {
-      res.status(500).json({ success: false, message: err.message });
+      if (qRows.length > 0) {
+        const leadId = qRows[0].lead_id;
+        const currentAssignee = qRows[0].assignee || "";
+
+        const [estUsers] = await db.promise().query(
+          "SELECT name FROM users WHERE role = 'Estimation' LIMIT 1",
+        );
+        const estUser = estUsers.length > 0 ? estUsers[0].name : "Khushali";
+
+        let logs = [];
+        try {
+          logs = qRows[0].assignee_log ? JSON.parse(qRows[0].assignee_log) : [];
+          if (!Array.isArray(logs)) logs = [];
+        } catch {
+          logs = [];
+        }
+
+        logs.push({
+          previous_assignee: currentAssignee,
+          new_assignee: estUser,
+          changed_by: updatedBy,
+          changed_at: new Date().toISOString(),
+          description: null,
+          files: [],
+        });
+
+        // Log completed Sales phase BEFORE sending back to Estimation
+        await logQuotationTrafficLight(
+          leadId,
+          parseInt(req.params.id),
+          "Sales",
+          currentAssignee || updatedBy,
+        );
+
+        await db.promise().query(
+          "UPDATE quotation SET assignee = ?, assignee_log = ?, quotation_status = ?, estimation_assigned_at = NOW(), sales_assigned_at = NULL WHERE id = ?",
+          [estUser, JSON.stringify(logs), quotation_status, req.params.id],
+        );
+
+        if (leadId) {
+          await db.promise().query(
+            "UPDATE `lead` SET assignee = ? WHERE lead_id = ?",
+            [estUser, leadId],
+          );
+        }
+      }
+
+    // ============================================================
+    // OTHER STATUS (Pending, Sent, Lost, Won direct)
+    // ============================================================
+    } else {
+      await db.promise().query(
+        "UPDATE quotation SET quotation_status = ? WHERE id = ?",
+        [quotation_status, req.params.id],
+      );
+
+      // ✅ WON (direct) — project insert
+      if (quotation_status && quotation_status.trim().toLowerCase() === "won") {
+        const [quotationRows] = await db.promise().query(
+          `SELECT id, company_name, customer_name, reference, source, quotation_no, quotation_date, grand_total
+           FROM quotation WHERE id = ?`,
+          [req.params.id],
+        );
+
+        if (quotationRows.length > 0) {
+          const quotation = quotationRows[0];
+
+          const [projectRows] = await db.promise().query(
+            "SELECT id FROM project WHERE quotation_id = ?",
+            [quotation.id],
+          );
+
+          if (projectRows.length === 0) {
+            await db.promise().query(
+              `INSERT INTO project (
+                quotation_id,
+                company_name,
+                customer_name,
+                reference,
+                source,
+                quotation_no,
+                quotation_date,
+                grand_total,
+                architecture_net_amount,
+                expense_net_amount,
+                net_revenue_amount
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                quotation.id,
+                quotation.company_name,
+                quotation.customer_name,
+                quotation.reference,
+                quotation.source,
+                quotation.quotation_no,
+                quotation.quotation_date,
+                quotation.grand_total,
+                0,
+                0,
+                0,
+              ],
+            );
+            console.log("✅ Project Created from Won quotation:", quotation.id);
+          }
+        }
+      }
+
+      // Log traffic light for Sent / Won / Lost
+      if (["Sent", "Won", "Lost"].includes(quotation_status)) {
+        try {
+          const [qInfo] = await db.promise().query(
+            "SELECT lead_id, assignee FROM quotation WHERE id = ?",
+            [req.params.id],
+          );
+          if (qInfo.length > 0) {
+            await logQuotationTrafficLight(
+              qInfo[0].lead_id,
+              parseInt(req.params.id),
+              "Sales",
+              qInfo[0].assignee || updatedBy,
+            );
+          }
+        } catch (e) {
+          console.error("Traffic light log error (status update):", e);
+        }
+      }
     }
-  },
-);
+
+    res.json({ success: true, message: "Status updated successfully" });
+  } catch (err) {
+    console.error("UPDATE STATUS ERROR:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // =============================
 // GET FILES FOR A QUOTATION
