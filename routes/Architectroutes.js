@@ -35,7 +35,7 @@ router.post("/insert", (req, res) => {
    optional query: ?status=active&search=krish
 ============================================================ */
 router.get("/", (req, res) => {
-  const { status, search } = req.query;
+  const { status, searchName, searchEmail, searchMobile } = req.query;
 
   let sql = "SELECT * FROM architect WHERE 1=1";
   const values = [];
@@ -44,11 +44,20 @@ router.get("/", (req, res) => {
     sql += " AND status = ?";
     values.push(status);
   }
-  if (search) {
-    sql += " AND (name LIKE ? OR email LIKE ? OR mobile_no LIKE ?)";
-    values.push(`%${search}%`, `%${search}%`, `%${search}%`);
-  }
+ if (searchName) {
+  sql += " AND name LIKE ?";
+  values.push(`%${searchName}%`);
+}
 
+if (searchEmail) {
+  sql += " AND email LIKE ?";
+  values.push(`%${searchEmail}%`);
+}
+
+if (searchMobile) {
+  sql += " AND mobile_no LIKE ?";
+  values.push(`%${searchMobile}%`);
+}
   sql += " ORDER BY id DESC";
 
   db.query(sql, values, (err, rows) => {
