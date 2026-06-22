@@ -173,6 +173,33 @@ router.get("/:id", authenticateAndAuthorize(), (req, res) => {
   );
 });
 
+
+// =======================
+// MY TODAY'S REMINDERS
+// =======================
+router.get("/reminders/today", authenticateAndAuthorize(), (req, res) => {
+  const userId = req.user.id;
+
+  const sql = `
+    SELECT * FROM calendar_activities
+    WHERE FIND_IN_SET(?, REPLACE(assignee, ', ', ','))
+      AND status = 'Pending'
+      AND activity_date <= CURDATE()
+    ORDER BY activity_date ASC, activity_time ASC
+  `;
+
+  db.query(sql, [userId], (err, rows) => {
+    if (err) {
+      console.error("Reminder fetch error:", err);
+      return res.status(500).json({ success: false, message: "Database error", error: err.message });
+    }
+    const todayStr = new Date().toISOString().split("T")[0];
+    const today = rows.filter((r) => String(r.activity_date).split("T")[0] === todayStr);
+    const overdue = rows.filter((r) => String(r.activity_date).split("T")[0] < todayStr);
+    return res.json({ success: true, today, overdue });
+  });
+});
+
 // =======================
 // UPDATE ACTIVITY
 // =======================
