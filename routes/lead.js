@@ -345,7 +345,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       description,
       created_by
     )
-    VALUES (?, ?, ?, ?,?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -566,7 +566,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     customer_name,
     reference,
     source,
-    assignee,
+    mobile_no,
     status,
     from_created,
     to_created,
@@ -585,7 +585,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
-      l.assignee,
+      l.mobile_no,
       l.status,
       l.created_at,
       l.updated_by,
@@ -636,7 +636,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   if (customer_name) { sql += " AND l.customer_name LIKE ?"; values.push(`%${customer_name}%`); }
   if (reference) { sql += " AND l.reference LIKE ?"; values.push(`%${reference}%`); }
   if (source) { sql += " AND l.source = ?"; values.push(source); }
-  if (assignee) { sql += " AND FIND_IN_SET(?, l.assignee)"; values.push(assignee); }
+  if (mobile_no) { sql += " AND FIND_IN_SET(?, l.mobile_no)"; values.push(mobile_no); }
   if (status) { sql += " AND l.status = ?"; values.push(status); }
 
   if (from_created && to_created) {

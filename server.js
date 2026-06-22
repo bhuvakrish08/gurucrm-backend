@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 // Set Node.js timezone from .env (TZ=Asia/Kolkata) - fixes TIMESTAMPDIFF alignment
@@ -39,14 +39,16 @@ const pi = require('./routes/perfomainvoices')
 const activitiesRoutes = require('./routes/activities');
 const quotationRevisionRoutes = require("./routes/quotationRevision");
 const calendarRoutes = require("./routes/calender");
+const Architectroutes = require("./routes/Architectroutes");
+const projectRoutes = require("./routes/projectRoutes");
+
+
 
 
 
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
-
-
 
 app.use("/api", loginRoutes);
 app.use("/api/todos", todoRoutes);
@@ -85,8 +87,8 @@ app.use("/api/pi",pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/api/quotation-revision", quotationRevisionRoutes);
 app.use("/api/calendar", calendarRoutes);
-
-
+app.use("/api/architect",Architectroutes);
+app.use("/api/project", projectRoutes);
 
 
 
