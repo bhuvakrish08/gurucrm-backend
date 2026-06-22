@@ -4,26 +4,31 @@ const db = require("../db"); // tamara db.js no sachho relative path apjo
 
 /* ============================================================
    1) CREATE — Insert new architect
-   POST /api/architects
+   POST /api/architect/insert
    body: { name, email, address, status, mobile_no }
 ============================================================ */
 router.post("/insert", (req, res) => {
   const { name, email, address, status, mobile_no } = req.body;
 
   if (!name || !email || !mobile_no) {
-    return res.status(400).json({ success: false, message: "name, email, mobile_no required che" });
+    return res
+      .status(400)
+      .json({ success: false, message: "name, email, mobile_no required che" });
   }
 
   const sql = `
     INSERT INTO architect (name, email, address, status, mobile_no)
     VALUES (?, ?, ?, ?, ?)
   `;
+  // ✅ status default fixed to "active" (string) to match varchar column
   const values = [name, email, address || null, status || "active", mobile_no];
 
   db.query(sql, values, (err, result) => {
     if (err) {
       console.error("Insert Error:", err);
-      return res.status(500).json({ success: false, message: "Insert failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Insert failed", error: err.message });
     }
     res.status(201).json({ success: true, message: "Architect added", id: result.insertId });
   });
@@ -31,8 +36,8 @@ router.post("/insert", (req, res) => {
 
 /* ============================================================
    2) READ ALL — Get all architects (with simple search/filter)
-   GET /api/architects
-   optional query: ?status=active&search=krish
+   GET /api/architect
+   optional query: ?status=active&searchName=krish&searchEmail=...&searchMobile=...
 ============================================================ */
 router.get("/", (req, res) => {
   const { status, searchName, searchEmail, searchMobile } = req.query;
@@ -44,26 +49,27 @@ router.get("/", (req, res) => {
     sql += " AND status = ?";
     values.push(status);
   }
- if (searchName) {
-  sql += " AND name LIKE ?";
-  values.push(`%${searchName}%`);
-}
+  if (searchName) {
+    sql += " AND name LIKE ?";
+    values.push(`%${searchName}%`);
+  }
+  if (searchEmail) {
+    sql += " AND email LIKE ?";
+    values.push(`%${searchEmail}%`);
+  }
+  if (searchMobile) {
+    sql += " AND mobile_no LIKE ?";
+    values.push(`%${searchMobile}%`);
+  }
 
-if (searchEmail) {
-  sql += " AND email LIKE ?";
-  values.push(`%${searchEmail}%`);
-}
-
-if (searchMobile) {
-  sql += " AND mobile_no LIKE ?";
-  values.push(`%${searchMobile}%`);
-}
   sql += " ORDER BY id DESC";
 
   db.query(sql, values, (err, rows) => {
     if (err) {
       console.error("Fetch Error:", err);
-      return res.status(500).json({ success: false, message: "Fetch failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Fetch failed", error: err.message });
     }
     res.json({ success: true, count: rows.length, data: rows });
   });
@@ -71,7 +77,7 @@ if (searchMobile) {
 
 /* ============================================================
    3) READ ONE — Get single architect by id
-   GET /api/architects/:id
+   GET /api/architect/:id
 ============================================================ */
 router.get("/:id", (req, res) => {
   const { id } = req.params;
@@ -79,7 +85,9 @@ router.get("/:id", (req, res) => {
   db.query("SELECT * FROM architect WHERE id = ?", [id], (err, rows) => {
     if (err) {
       console.error("Fetch Error:", err);
-      return res.status(500).json({ success: false, message: "Fetch failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Fetch failed", error: err.message });
     }
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: "Architect not found" });
@@ -90,7 +98,7 @@ router.get("/:id", (req, res) => {
 
 /* ============================================================
    4) UPDATE — Update full record
-   PUT /api/architects/:id
+   PUT /api/architect/:id
    body: { name, email, address, status, mobile_no }
 ============================================================ */
 router.put("/:id", (req, res) => {
@@ -98,7 +106,9 @@ router.put("/:id", (req, res) => {
   const { name, email, address, status, mobile_no } = req.body;
 
   if (!name || !email || !mobile_no) {
-    return res.status(400).json({ success: false, message: "name, email, mobile_no required che" });
+    return res
+      .status(400)
+      .json({ success: false, message: "name, email, mobile_no required che" });
   }
 
   const sql = `
@@ -111,7 +121,9 @@ router.put("/:id", (req, res) => {
   db.query(sql, values, (err, result) => {
     if (err) {
       console.error("Update Error:", err);
-      return res.status(500).json({ success: false, message: "Update failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Update failed", error: err.message });
     }
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Architect not found" });
@@ -121,22 +133,30 @@ router.put("/:id", (req, res) => {
 });
 
 /* ============================================================
-   5) UPDATE STATUS ONLY
-   PATCH /api/architects/:id/status
-   body: { status }
+   5) UPDATE STATUS ONLY  ⭐ THIS IS THE ROUTE THAT WAS FAILING
+   PATCH /api/architect/:id
+   body: { status: "active" | "inactive" }
 ============================================================ */
 router.patch("/:id", (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  if (!status) {
-    return res.status(400).json({ success: false, message: "status field required che" });
+  // ✅ FIX: explicit whitelist check instead of `if (!status)`.
+  //         `if (!status)` looks safe but is a trap the moment someone
+  //         sends 0 / false / "" — here we make the accepted values explicit
+  //         so it always matches what the DB column actually allows.
+  if (!status || !["active", "inactive"].includes(status)) {
+    return res
+      .status(400)
+      .json({ success: false, message: 'status must be "active" or "inactive"' });
   }
 
   db.query("UPDATE architect SET status = ? WHERE id = ?", [status, id], (err, result) => {
     if (err) {
       console.error("Status Update Error:", err);
-      return res.status(500).json({ success: false, message: "Status update failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Status update failed", error: err.message });
     }
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Architect not found" });
@@ -147,7 +167,7 @@ router.patch("/:id", (req, res) => {
 
 /* ============================================================
    6) DELETE — Remove architect
-   DELETE /api/architects/:id
+   DELETE /api/architect/:id
 ============================================================ */
 router.delete("/:id", (req, res) => {
   const { id } = req.params;
@@ -155,7 +175,9 @@ router.delete("/:id", (req, res) => {
   db.query("DELETE FROM architect WHERE id = ?", [id], (err, result) => {
     if (err) {
       console.error("Delete Error:", err);
-      return res.status(500).json({ success: false, message: "Delete failed", error: err.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Delete failed", error: err.message });
     }
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Architect not found" });
@@ -163,6 +185,5 @@ router.delete("/:id", (req, res) => {
     res.json({ success: true, message: "Architect deleted" });
   });
 });
-
 
 module.exports = router;
