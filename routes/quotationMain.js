@@ -1840,7 +1840,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 grandTotal,
                 0,
                 0,
-                0,
+                grandTotal,
               ],
             );
             console.log("✅ Project created from Approved quotation:", req.params.id);
@@ -1957,7 +1957,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 quotation.grand_total,
                 0,
                 0,
-                0,
+                quotation.grand_total,
               ],
             );
             console.log("✅ Project Created from Won quotation:", quotation.id);
@@ -2017,12 +2017,32 @@ router.get("/files/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
+    await db.promise().query("START TRANSACTION");
+
     const [qRow] = await db
       .promise()
       .query("SELECT lead_id, quotation_status FROM quotation WHERE id = ?", [
         req.params.id,
       ]);
     const deletedQuotation = qRow[0];
+
+    // Fetch and delete associated project if it exists
+    const [projects] = await db
+      .promise()
+      .query("SELECT id FROM project WHERE quotation_id = ?", [req.params.id]);
+    const projectIds = projects.map((p) => p.id);
+
+    if (projectIds.length > 0) {
+      await db
+        .promise()
+        .query("DELETE FROM project_architecture WHERE project_id IN (?)", [projectIds]);
+      await db
+        .promise()
+        .query("DELETE FROM project_expense WHERE project_id IN (?)", [projectIds]);
+      await db
+        .promise()
+        .query("DELETE FROM project WHERE id IN (?)", [projectIds]);
+    }
 
     const [files] = await db
       .promise()
@@ -2065,8 +2085,10 @@ router.delete("/:id", async (req, res) => {
         );
     }
 
-    res.json({ success: true, message: "Quotation deleted successfully" });
+    await db.promise().query("COMMIT");
+    res.json({ success: true, message: "Quotation and all associated projects deleted successfully" });
   } catch (err) {
+    await db.promise().query("ROLLBACK");
     console.log(err);
     res.status(500).json({ success: false, message: err.message });
   }
