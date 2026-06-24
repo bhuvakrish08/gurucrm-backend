@@ -8,22 +8,24 @@ router.get("/list", authenticateAndAuthorize(), async (req, res) => {
   try {
     const [rows] = await db.promise().query(`
         SELECT
-          id,
-          quotation_id,
-          company_name,
-          customer_name,
-          reference,
-          source,
-          quotation_no,
-          quotation_date,
-          grand_total,
-          architecture_net_amount,
-          expense_net_amount,
-          net_revenue_amount,
-          created_at,
-          updated_at
-        FROM project
-        ORDER BY id DESC
+          p.id,
+          p.quotation_id,
+          p.company_name,
+          p.customer_name,
+          p.reference,
+          COALESCE(ls.name, p.source) AS source,
+          p.quotation_no,
+          p.quotation_date,
+          p.grand_total,
+          p.amount,
+          p.architecture_net_amount,
+          p.expense_net_amount,
+          p.net_revenue_amount,
+          p.created_at,
+          p.updated_at
+        FROM project p
+        LEFT JOIN inquiry_lead_source ls ON ls.id = p.source
+        ORDER BY p.id DESC
       `);
 
     res.status(200).json({
@@ -48,7 +50,7 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
     const [projectStats] = await db.promise().query(`
       SELECT 
         COUNT(id) as total_projects,
-        COALESCE(SUM(grand_total), 0) as total_revenue,
+        COALESCE(SUM(amount), 0) as total_revenue,
         COALESCE(SUM(architecture_net_amount), 0) as total_architecture_net,
         COALESCE(SUM(expense_net_amount), 0) as total_expense_net,
         COALESCE(SUM(net_revenue_amount), 0) as total_net_revenue
@@ -112,7 +114,7 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       SELECT 
         DATE_FORMAT(created_at, '%Y-%m') as month_key,
         DATE_FORMAT(MIN(created_at), '%b %Y') as month_name,
-        COALESCE(SUM(grand_total), 0) as revenue,
+        COALESCE(SUM(amount), 0) as revenue,
         COALESCE(SUM(architecture_net_amount), 0) as architecture,
         COALESCE(SUM(expense_net_amount), 0) as expenses,
         COALESCE(SUM(net_revenue_amount), 0) as net_revenue
@@ -128,6 +130,7 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
         id,
         company_name,
         customer_name,
+        amount,
         grand_total,
         net_revenue_amount
       FROM project
@@ -190,16 +193,16 @@ router.post("/:id/architectures", authenticateAndAuthorize(), async (req, res) =
   try {
     await connection.beginTransaction();
 
-    // 1. Get project details to get grand_total and current expense_net_amount
+    // 1. Get project details to get amount and current expense_net_amount
     const [projectRows] = await connection.query(
-      "SELECT grand_total, expense_net_amount FROM project WHERE id = ?",
+      "SELECT grand_total, amount, expense_net_amount FROM project WHERE id = ?",
       [projectId]
     );
     if (projectRows.length === 0) {
       connection.release();
       return res.status(404).json({ success: false, message: "Project not found" });
     }
-    const grandTotal = Number(projectRows[0].grand_total) || 0;
+    const amountVal = Number(projectRows[0].amount) || 0;
     const expenseNetAmount = Number(projectRows[0].expense_net_amount) || 0;
 
     // 2. Delete existing architecture assignments for this project
@@ -233,8 +236,8 @@ router.post("/:id/architectures", authenticateAndAuthorize(), async (req, res) =
       );
     }
 
-    // 4. Calculate net_revenue_amount = grand_total - totalArchitectureAmount - expenseNetAmount
-    const netRevenue = grandTotal - totalArchitectureAmount - expenseNetAmount;
+    // 4. Calculate net_revenue_amount = amountVal - totalArchitectureAmount - expenseNetAmount
+    const netRevenue = amountVal - totalArchitectureAmount - expenseNetAmount;
 
     // 5. Update project table (architecture_net_amount and net_revenue_amount)
     await connection.query(
@@ -296,16 +299,16 @@ router.post("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // 1. Get project details to get grand_total and architecture_net_amount
+    // 1. Get project details to get amount and architecture_net_amount
     const [projectRows] = await connection.query(
-      "SELECT grand_total, architecture_net_amount FROM project WHERE id = ?",
+      "SELECT grand_total, amount, architecture_net_amount FROM project WHERE id = ?",
       [projectId]
     );
     if (projectRows.length === 0) {
       connection.release();
       return res.status(404).json({ success: false, message: "Project not found" });
     }
-    const grandTotal = Number(projectRows[0].grand_total) || 0;
+    const amountVal = Number(projectRows[0].amount) || 0;
     const architectureNetAmount = Number(projectRows[0].architecture_net_amount) || 0;
 
     // 2. Delete existing expenses for this project
@@ -334,8 +337,8 @@ router.post("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
       );
     }
 
-    // 4. Calculate net_revenue_amount = grand_total - architectureNetAmount - totalExpenseAmount
-    const netRevenue = grandTotal - architectureNetAmount - totalExpenseAmount;
+    // 4. Calculate net_revenue_amount = amountVal - architectureNetAmount - totalExpenseAmount
+    const netRevenue = amountVal - architectureNetAmount - totalExpenseAmount;
 
     // 5. Update project table (expense_net_amount and net_revenue_amount)
     await connection.query(
@@ -369,7 +372,7 @@ router.post("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
 // Update project details
 router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
   const projectId = req.params.id;
-  const { company_name, customer_name, reference, source, grand_total } = req.body;
+  const { company_name, customer_name, reference, source, grand_total, amount } = req.body;
 
   const connection = await db.promise().getConnection();
   try {
@@ -388,8 +391,9 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
     const archNet = Number(projectRows[0].architecture_net_amount) || 0;
     const expNet = Number(projectRows[0].expense_net_amount) || 0;
     const gTotal = Number(grand_total) || 0;
+    const baseAmt = Number(amount) || 0;
 
-    const netRevenue = gTotal - archNet - expNet;
+    const netRevenue = baseAmt - archNet - expNet;
 
     await connection.query(
       `UPDATE project 
@@ -398,9 +402,10 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
            reference = ?,
            source = ?,
            grand_total = ?,
+           amount = ?,
            net_revenue_amount = ?
        WHERE id = ?`,
-      [company_name, customer_name, reference, source, gTotal, netRevenue, projectId]
+      [company_name, customer_name, reference, source, gTotal, baseAmt, netRevenue, projectId]
     );
 
     await connection.commit();
@@ -416,6 +421,7 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
         reference,
         source,
         grand_total: gTotal,
+        amount: baseAmt,
         net_revenue_amount: netRevenue
       }
     });

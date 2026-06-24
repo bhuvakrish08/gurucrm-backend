@@ -156,15 +156,15 @@ async function logQuotationTrafficLight(lead_id, quotation_id, role_type, assign
         }
       }
     }
-    
+
     if (hours >= RED_HOURS) color = 'red';
     else if (hours >= YELLOW_HOURS) color = 'yellow';
-    
+
     await db.promise().query(
       'INSERT INTO quotation_traffic_light_log (lead_id, quotation_id, role_type, assignee, status_color, hours_elapsed) VALUES (?, ?, ?, ?, ?, ?)',
       [lead_id, quotation_id || null, role_type, assignee || 'Unknown', color, hours]
     );
-  } catch(e) {
+  } catch (e) {
     console.error('Traffic Light Log Error:', e);
   }
 }
@@ -395,7 +395,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
         [userName, userName, userName],
       );
     }
-        // Compute quotation_dot_color for each row
+    // Compute quotation_dot_color for each row
     const roleMap = await getUserRoleMap();
     const now = new Date();
     const enrichedRows = rows.map(row => {
@@ -482,7 +482,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           else if (activeColor === 'yellow' || loggedColor === 'yellow') finalColor = 'yellow';
           row.quotation_dot_color = finalColor;
         }
-      } catch(e) { /* ignore */ }
+      } catch (e) { /* ignore */ }
     }
 
     res.json({ success: true, result: enrichedRows });
@@ -786,7 +786,7 @@ router.post(
         }
       }
 
-      
+
       const roleMap = await getUserRoleMap();
       const stage = determineStage(assignee, roleMap);
       let salesAssignedAt = null;
@@ -1074,7 +1074,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
 
     const [rows] = await db.promise().query(sql, values);
 
-        // Compute quotation_dot_color for each row
+    // Compute quotation_dot_color for each row
     const roleMap = await getUserRoleMap();
     const now = new Date();
     const enrichedRows = rows.map(row => {
@@ -1161,7 +1161,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
           else if (activeColor === 'yellow' || loggedColor === 'yellow') finalColor = 'yellow';
           row.quotation_dot_color = finalColor;
         }
-      } catch(e) { /* ignore */ }
+      } catch (e) { /* ignore */ }
     }
 
     res.json({ success: true, data: enrichedRows });
@@ -1474,7 +1474,7 @@ router.put(
                   }
                 }
               }
-            } catch (e) {}
+            } catch (e) { }
           }
         }
 
@@ -1696,6 +1696,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           q.source,
           q.quotation_date,
           COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
+          COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS amount,
           q.assignee_log
         FROM quotation q
         LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
@@ -1704,14 +1705,15 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       );
 
       if (qRow.length > 0) {
-        const leadId        = qRow[0].lead_id;
+        const leadId = qRow[0].lead_id;
         const currentAssignee = qRow[0].assignee || "";
-        const customerName  = qRow[0].customer_name || null;
-        const quotationNo   = qRow[0].quotation_no || null;
-        const grandTotal    = qRow[0].grand_total || 0;
-        const source        = qRow[0].source || null;
-        const reference     = qRow[0].reference || null;
-        const companyName   = qRow[0].company_name || null;
+        const customerName = qRow[0].customer_name || null;
+        const quotationNo = qRow[0].quotation_no || null;
+        const grandTotal = qRow[0].grand_total || 0;
+        const amount = qRow[0].amount || 0;
+        const source = qRow[0].source || null;
+        const reference = qRow[0].reference || null;
+        const companyName = qRow[0].company_name || null;
         const quotationDate = qRow[0].quotation_date || null;
 
         // Decline other quotations for this lead
@@ -1758,7 +1760,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
 
 
 
-        
+
         // Log completed Sales phase BEFORE reassigning to PI user
         await logQuotationTrafficLight(
           leadId,
@@ -1825,10 +1827,11 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 quotation_no,
                 quotation_date,
                 grand_total,
+                amount,
                 architecture_net_amount,
                 expense_net_amount,
                 net_revenue_amount
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 req.params.id,
                 companyName,
@@ -1838,9 +1841,10 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 quotationNo,
                 quotationDate,
                 grandTotal,
+                amount,
                 0,
                 0,
-                grandTotal,
+                amount,
               ],
             );
             console.log("✅ Project created from Approved quotation:", req.params.id);
@@ -1850,9 +1854,9 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         }
       }
 
-    // ============================================================
-    // REVISION BLOCK
-    // ============================================================
+      // ============================================================
+      // REVISION BLOCK
+      // ============================================================
     } else if (quotation_status === "Revision") {
       const [qRows] = await db.promise().query(
         "SELECT lead_id, assignee, assignee_log FROM quotation WHERE id = ?",
@@ -1906,9 +1910,9 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         }
       }
 
-    // ============================================================
-    // OTHER STATUS (Pending, Sent, Lost, Won direct)
-    // ============================================================
+      // ============================================================
+      // OTHER STATUS (Pending, Sent, Lost, Won direct)
+      // ============================================================
     } else {
       await db.promise().query(
         "UPDATE quotation SET quotation_status = ? WHERE id = ?",
@@ -1918,8 +1922,12 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       // ✅ WON (direct) — project insert
       if (quotation_status && quotation_status.trim().toLowerCase() === "won") {
         const [quotationRows] = await db.promise().query(
-          `SELECT id, company_name, customer_name, reference, source, quotation_no, quotation_date, grand_total
-           FROM quotation WHERE id = ?`,
+          `SELECT q.id, q.company_name, q.customer_name, q.reference, q.source, q.quotation_no, q.quotation_date, 
+                  COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
+                  COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS amount
+           FROM quotation q
+           LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
+           WHERE q.id = ?`,
           [req.params.id],
         );
 
@@ -1942,10 +1950,11 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 quotation_no,
                 quotation_date,
                 grand_total,
+                amount,
                 architecture_net_amount,
                 expense_net_amount,
                 net_revenue_amount
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 quotation.id,
                 quotation.company_name,
@@ -1955,9 +1964,10 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 quotation.quotation_no,
                 quotation.quotation_date,
                 quotation.grand_total,
+                quotation.amount || 0,
                 0,
                 0,
-                quotation.grand_total,
+                quotation.amount || 0,
               ],
             );
             console.log("✅ Project Created from Won quotation:", quotation.id);
