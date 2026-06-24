@@ -1,11 +1,11 @@
 const express = require("express");
 const db = require("../db");
-const authenticateToken = require("../middlewares/authMiddleware");
+const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 
 const router = express.Router();
 
-// Read all data
-router.get("/read", (req, res) => {
+// Read all data (accessible to authenticated users)
+router.get("/read", authenticateAndAuthorize(), (req, res) => {
   const { search2 = "", status } = req.query;
 
   let query = "SELECT * FROM expense_category WHERE 1=1";
@@ -26,8 +26,8 @@ router.get("/read", (req, res) => {
   });
 });
 
-// Insert data
-router.post("/insert", (req, res) => {
+// Insert data (Admin/Super Admin only)
+router.post("/insert", authenticateAndAuthorize("Admin", "Super Admin"), (req, res) => {
   const { name, status } = req.body;
 
   const query = "INSERT INTO expense_category (name, status) VALUES (?, ?)";
@@ -37,8 +37,8 @@ router.post("/insert", (req, res) => {
   });
 });
 
-// Update data
-router.put("/update/:id", (req, res) => {
+// Update data (Admin/Super Admin only)
+router.put("/update/:id", authenticateAndAuthorize("Admin", "Super Admin"), (req, res) => {
   const { id } = req.params;
   const { name, status } = req.body;
 
@@ -51,8 +51,8 @@ router.put("/update/:id", (req, res) => {
   });
 });
 
-// update toggle
-router.put("/status/:id", (req, res) => {
+// update toggle (Admin/Super Admin only)
+router.put("/status/:id", authenticateAndAuthorize("Admin", "Super Admin"), (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -62,6 +62,18 @@ router.put("/status/:id", (req, res) => {
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "Record not found" });
     res.json({ message: "Status updated successfully" });
+  });
+});
+
+// Delete data (Admin/Super Admin only)
+router.delete("/delete/:id", authenticateAndAuthorize("Admin", "Super Admin"), (req, res) => {
+  const { id } = req.params;
+  const query = "DELETE FROM expense_category WHERE id = ?";
+  db.query(query, [id], (err, result) => {
+    if (err) return res.status(500).json(err);
+    if (result.affectedRows === 0)
+      return res.status(404).json({ message: "Record not found" });
+    res.json({ message: "Deleted successfully" });
   });
 });
 

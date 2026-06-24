@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const authenticateAndAuthorize = require("../middlewares/authMiddleware");
+const cloudinary = require("../utils/cloudinary");
 
 const router = express.Router();
 // 🚦 Traffic light thresholds from .env
@@ -520,7 +521,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
 });
 
 /* =====================================
-   DELETE LEAD (with follow-up cleanup)
+   DELETE LEAD (with full cascading dependencies cleanup)
 ===================================== */
 router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
   const leadId = req.params.id;
@@ -528,28 +529,141 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
     await db.promise().query("START TRANSACTION");
 
-    const [lead] = await db.promise().query("SELECT lead_id FROM lead WHERE lead_id = ?", [leadId]);
+    // 1. Check if lead exists
+    const [lead] = await db.promise().query("SELECT lead_id FROM `lead` WHERE lead_id = ?", [leadId]);
     if (lead.length === 0) {
       await db.promise().query("ROLLBACK");
       return res.status(404).json({ message: "Lead not found" });
     }
 
-    const [followUps] = await db.promise().query(
-      "SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?", [leadId]
-    );
-    const ids = followUps.map((f) => f.follow_up_id);
+    // 2. Fetch all quotations linked to this lead
+    const [quotations] = await db.promise().query("SELECT id FROM quotation WHERE lead_id = ?", [leadId]);
+    const quotationIds = quotations.map((q) => q.id);
 
-    if (ids.length > 0) {
+    if (quotationIds.length > 0) {
+      // 2a. Delete PI follow-up details
       await db.promise().query(
-        "DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)", [ids]
+        "DELETE FROM pi_follow_up WHERE pi_id IN (SELECT pi_id FROM proforma_invoices WHERE quotation_id IN (?))",
+        [quotationIds]
+      );
+
+      // 2b. Delete proforma invoices
+      await db.promise().query(
+        "DELETE FROM proforma_invoices WHERE quotation_id IN (?)",
+        [quotationIds]
+      );
+
+      // 2c. Fetch all projects associated with these quotations
+      const [projects] = await db.promise().query(
+        "SELECT id FROM project WHERE quotation_id IN (?)",
+        [quotationIds]
+      );
+      const projectIds = projects.map((p) => p.id);
+
+      if (projectIds.length > 0) {
+        // Delete project architectures
+        await db.promise().query(
+          "DELETE FROM project_architecture WHERE project_id IN (?)",
+          [projectIds]
+        );
+        // Delete project expenses
+        await db.promise().query(
+          "DELETE FROM project_expense WHERE project_id IN (?)",
+          [projectIds]
+        );
+        // Delete projects
+        await db.promise().query(
+          "DELETE FROM project WHERE id IN (?)",
+          [projectIds]
+        );
+      }
+
+      // 2d. Fetch and delete quotation revisions & their files
+      const [revisions] = await db.promise().query(
+        "SELECT id FROM quotation_revision WHERE quotation_id IN (?)",
+        [quotationIds]
+      );
+      const revisionIds = revisions.map((r) => r.id);
+
+      if (revisionIds.length > 0) {
+        await db.promise().query(
+          "DELETE FROM quotation_revision_files WHERE quotation_revision_id IN (?)",
+          [revisionIds]
+        );
+        await db.promise().query(
+          "DELETE FROM quotation_revision WHERE quotation_id IN (?)",
+          [quotationIds]
+        );
+      }
+
+      // 2e. Fetch and delete quotation files
+      const [quotationFiles] = await db.promise().query(
+        "SELECT public_id FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
+        [quotationIds]
+      );
+      for (const file of quotationFiles) {
+        if (file.public_id) {
+          try {
+            const ext = file.file_name ? file.file_name.split(".").pop().toLowerCase() : "";
+            const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
+            await cloudinary.uploader.destroy(file.public_id, {
+              resource_type: isRaw ? "raw" : "image"
+            });
+          } catch (e) {
+            console.log("Cloudinary destroy error:", e.message);
+          }
+        }
+      }
+
+      await db.promise().query(
+        "DELETE FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
+        [quotationIds]
+      );
+
+      // 2f. Delete quotation splits
+      await db.promise().query(
+        "DELETE FROM quotation_splits WHERE quotation_id IN (?)",
+        [quotationIds]
+      );
+
+      // 2g. Delete quotation traffic light logs
+      await db.promise().query(
+        "DELETE FROM quotation_traffic_light_log WHERE quotation_id IN (?)",
+        [quotationIds]
+      );
+
+      // 2h. Delete quotations
+      await db.promise().query(
+        "DELETE FROM quotation WHERE lead_id = ?",
+        [leadId]
+      );
+    }
+
+    // 3. Delete lead follow ups and their files
+    const [followUps] = await db.promise().query(
+      "SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?",
+      [leadId]
+    );
+    const followUpIds = followUps.map((f) => f.follow_up_id);
+
+    if (followUpIds.length > 0) {
+      await db.promise().query(
+        "DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)",
+        [followUpIds]
       );
     }
 
     await db.promise().query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
-    await db.promise().query("DELETE FROM lead WHERE lead_id = ?", [leadId]);
+
+    // 4. Delete lead follow-up status logs
+    await db.promise().query("DELETE FROM lead_followup_status_log WHERE lead_id = ?", [leadId]);
+
+    // 5. Delete the lead itself
+    await db.promise().query("DELETE FROM `lead` WHERE lead_id = ?", [leadId]);
+
     await db.promise().query("COMMIT");
 
-    res.json({ success: true, message: "Lead deleted successfully" });
+    res.json({ success: true, message: "Lead and all its associated quotations, PIs, projects, revisions, follow-ups, and logs deleted successfully" });
   } catch (err) {
     await db.promise().query("ROLLBACK");
     console.log(err);
