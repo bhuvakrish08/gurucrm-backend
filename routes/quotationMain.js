@@ -1695,9 +1695,19 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           q.reference,
           q.source,
           q.quotation_date,
+<<<<<<< Updated upstream
           COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
           COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS amount,
           q.assignee_log
+=======
+          q.assignee_log,
+          COALESCE(qs.grand_total, q.grand_total) AS grand_total,
+          qs.amount_9,
+          qs.amount_18,
+          qs.tax_9,
+          qs.tax_18,
+          qs.grand_total AS split_grand_total
+>>>>>>> Stashed changes
         FROM quotation q
         LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
         WHERE q.id = ?`,
@@ -1705,6 +1715,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       );
 
       if (qRow.length > 0) {
+<<<<<<< Updated upstream
         const leadId = qRow[0].lead_id;
         const currentAssignee = qRow[0].assignee || "";
         const customerName = qRow[0].customer_name || null;
@@ -1715,6 +1726,30 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         const reference = qRow[0].reference || null;
         const companyName = qRow[0].company_name || null;
         const quotationDate = qRow[0].quotation_date || null;
+=======
+        const leadId          = qRow[0].lead_id;
+        const currentAssignee = qRow[0].assignee || "";
+        const customerName    = qRow[0].customer_name || null;
+        const quotationNo     = qRow[0].quotation_no || null;
+        const grandTotal      = qRow[0].grand_total || 0;
+        const source          = qRow[0].source || null;
+        const reference       = qRow[0].reference || null;
+        const companyName     = qRow[0].company_name || null;
+        const quotationDate   = qRow[0].quotation_date || null;
+
+        // ✅ quotation_splits માંથી આવેલ data
+        const amount9         = qRow[0].amount_9 || 0;
+        const amount18        = qRow[0].amount_18 || 0;
+        const tax9            = qRow[0].tax_9 || 0;
+        const tax18           = qRow[0].tax_18 || 0;
+        // total_9 = amount_9 + tax_9, total_18 = amount_18 + tax_18
+        const total9          = parseFloat(amount9) + parseFloat(tax9);
+        
+        
+        const total18         = parseFloat(amount18) + parseFloat(tax18);
+        console.log(total9)
+        console.log(total18)
+>>>>>>> Stashed changes
 
         // Decline other quotations for this lead
         if (leadId) {
@@ -1758,9 +1793,12 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           files: [],
         });
 
+<<<<<<< Updated upstream
 
 
 
+=======
+>>>>>>> Stashed changes
         // Log completed Sales phase BEFORE reassigning to PI user
         await logQuotationTrafficLight(
           leadId,
@@ -1775,7 +1813,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           [piUser, JSON.stringify(logs), req.params.id],
         );
 
-        // Create Proforma Invoice if not exists
+        // ✅ Create Proforma Invoice if not exists — WITH quotation_splits data
         const [existingPI] = await db.promise().query(
           "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
           [req.params.id],
@@ -1786,8 +1824,9 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
 
           await db.promise().query(
             `INSERT INTO proforma_invoices 
-              (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, source, reference, total, proforma_percentage, status)
-              VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, 0.00, 'draft')`,
+              (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, source, reference,
+               total, amount_9, amount_18, tax_9, tax_18, total_9, total_18, proforma_percentage, status)
+              VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, 'draft')`,
             [
               req.params.id,
               piNo,
@@ -1796,9 +1835,16 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
               piUser,
               source,
               reference,
-              grandTotal,
+              grandTotal,   // total = grand_total
+              amount9,
+              amount18,
+              tax9,
+              tax18,
+              total9,
+              total18,
             ],
           );
+          console.log("✅ Proforma Invoice created with splits data for quotation:", req.params.id);
         }
 
         // Update lead → Won + assignee = piUser
@@ -1809,7 +1855,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           );
         }
 
-        // ✅ PROJECT TABLE INSERT — Approved ત્યારે project create કર
+        // ✅ PROJECT TABLE INSERT
         if (leadId) {
           const [existingProject] = await db.promise().query(
             "SELECT id FROM project WHERE quotation_id = ?",
@@ -1889,7 +1935,6 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           files: [],
         });
 
-        // Log completed Sales phase BEFORE sending back to Estimation
         await logQuotationTrafficLight(
           leadId,
           parseInt(req.params.id),
@@ -1919,7 +1964,6 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         [quotation_status, req.params.id],
       );
 
-      // ✅ WON (direct) — project insert
       if (quotation_status && quotation_status.trim().toLowerCase() === "won") {
         const [quotationRows] = await db.promise().query(
           `SELECT q.id, q.company_name, q.customer_name, q.reference, q.source, q.quotation_no, q.quotation_date, 
@@ -1942,6 +1986,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
           if (projectRows.length === 0) {
             await db.promise().query(
               `INSERT INTO project (
+<<<<<<< Updated upstream
                 quotation_id,
                 company_name,
                 customer_name,
@@ -1968,6 +2013,16 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
                 0,
                 0,
                 quotation.amount || 0,
+=======
+                quotation_id, company_name, customer_name, reference, source,
+                quotation_no, quotation_date, grand_total,
+                architecture_net_amount, expense_net_amount, net_revenue_amount
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                quotation.id, quotation.company_name, quotation.customer_name,
+                quotation.reference, quotation.source, quotation.quotation_no,
+                quotation.quotation_date, quotation.grand_total, 0, 0, 0,
+>>>>>>> Stashed changes
               ],
             );
             console.log("✅ Project Created from Won quotation:", quotation.id);
@@ -1975,7 +2030,6 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         }
       }
 
-      // Log traffic light for Sent / Won / Lost
       if (["Sent", "Won", "Lost"].includes(quotation_status)) {
         try {
           const [qInfo] = await db.promise().query(
@@ -2002,6 +2056,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
 
 // =============================
 // GET FILES FOR A QUOTATION
