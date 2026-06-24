@@ -1715,6 +1715,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         const currentAssignee = qRow[0].assignee || "";
         const customerName = qRow[0].customer_name || null;
         const quotationNo = qRow[0].quotation_no || null;
+        
         const grandTotal = qRow[0].grand_total || 0;
         const amount = qRow[0].amount || 0;
         const source = qRow[0].source || null;
