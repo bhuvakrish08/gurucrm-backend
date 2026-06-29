@@ -589,4 +589,48 @@ router.put("/update-stage/:pi_id", async (req, res) => {
   }
 });
 
+
+// REPLACE the entire quotation-file route with this:
+router.get("/quotation-file/:quotation_id", async (req, res) => {
+  try {
+    const { quotation_id } = req.params;
+
+    // Check quotation exists and is Approved
+    const [quotation] = await db.promise().query(
+      `SELECT id, quotation_status FROM quotation WHERE id = ?`,
+      [quotation_id]
+    );
+
+    if (!quotation.length) {
+      return res.json({ success: false, message: "Quotation not found" });
+    }
+
+    if (quotation[0].quotation_status !== "Approved") {
+      return res.json({
+        success: false,
+        message: `Quotation is not approved (status: ${quotation[0].quotation_status})`,
+      });
+    }
+
+    // quot_follow_up_id in quotation_followup_files stores the quotation_id directly
+    const [files] = await db.promise().query(
+      `SELECT file_path 
+       FROM quotation_followup_files 
+       WHERE quot_follow_up_id = ? 
+       ORDER BY id DESC 
+       LIMIT 1`,
+      [quotation_id]
+    );
+
+    if (!files.length) {
+      return res.json({ success: false, message: "No attachment found for this quotation" });
+    }
+
+    return res.json({ success: true, file: files[0].file_path });
+
+  } catch (err) {
+    console.error("quotation-file error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 module.exports = router;
