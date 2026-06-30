@@ -145,7 +145,7 @@ router.patch("/:id", (req, res) => {
   //         `if (!status)` looks safe but is a trap the moment someone
   //         sends 0 / false / "" — here we make the accepted values explicit
   //         so it always matches what the DB column actually allows.
-  if (!status || !["active", "inactive"].includes(status)) {
+  if (!status || !["1", "0"].includes(status)) {
     return res
       .status(400)
       .json({ success: false, message: 'status must be "active" or "inactive"' });
