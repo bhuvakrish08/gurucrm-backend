@@ -42,7 +42,8 @@ const calendarRoutes = require("./routes/calender");
 const Architectroutes = require("./routes/Architectroutes");
 const projectRoutes = require("./routes/projectRoutes");
 
-
+const generalExpenseMasterRoutes = require("./routes/generalExpenseMaster");
+const netProfitRoutes = require("./routes/netProfit");
 
 
 
@@ -91,6 +92,9 @@ app.use("/api/architect",Architectroutes);
 app.use("/api/project", projectRoutes);
 
 
+
+app.use("/api/general-expense-master", generalExpenseMasterRoutes);
+app.use("/api/net-profit", netProfitRoutes);
 
 app.listen(process.env.PORT, () => {
   console.log("Server running");
