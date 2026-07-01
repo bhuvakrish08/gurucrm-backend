@@ -45,6 +45,10 @@ const projectRoutes = require("./routes/projectRoutes");
 const generalExpenseMasterRoutes = require("./routes/generalExpenseMaster");
 const netProfitRoutes = require("./routes/netProfit");
 
+const upcomingFollowUpRoutes = require("./routes/upcomingFollowUp");
+
+
+
 
 
 const app = express();
@@ -91,7 +95,7 @@ app.use("/api/calendar", calendarRoutes);
 app.use("/api/architect",Architectroutes);
 app.use("/api/project", projectRoutes);
 
-
+app.use("/api/followup", upcomingFollowUpRoutes);
 
 app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
