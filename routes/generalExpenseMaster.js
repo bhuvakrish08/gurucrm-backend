@@ -5,10 +5,10 @@ const db = require("../db"); // tamara db.js no sachho relative path apjo
 /* ============================================================
    1) CREATE — Insert new general expense type
    POST /api/general-expense-master/insert
-   body: { name, status }
+   body: { name, status, is_recurring, budget_limit }
 ============================================================ */
 router.post("/insert", (req, res) => {
-  const { name, status } = req.body;
+  const { name, status, is_recurring, budget_limit } = req.body;
 
   if (!name) {
     return res
@@ -17,10 +17,15 @@ router.post("/insert", (req, res) => {
   }
 
   const sql = `
-    INSERT INTO general_expense_master (name, status)
-    VALUES (?, ?)
+    INSERT INTO general_expense_master (name, status, is_recurring, budget_limit)
+    VALUES (?, ?, ?, ?)
   `;
-  const values = [name, status || "1"];
+  const values = [
+    name,
+    status || "1",
+    is_recurring ? 1 : 0,
+    budget_limit || null,
+  ];
 
   db.query(sql, values, (err, result) => {
     if (err) {
@@ -75,10 +80,12 @@ router.get("/", (req, res) => {
 /* ============================================================
    2b) READ ACTIVE ONLY — for the dropdown on the Net Profit page
    GET /api/general-expense-master/options
+   Returns is_recurring + budget_limit too so the frontend can show
+   the "Recurring" badge and budget alerts without an extra call.
 ============================================================ */
 router.get("/options", (req, res) => {
   db.query(
-    "SELECT id, name FROM general_expense_master WHERE status = '1' ORDER BY name ASC",
+    "SELECT id, name, is_recurring, budget_limit FROM general_expense_master WHERE status = '1' ORDER BY name ASC",
     (err, rows) => {
       if (err) {
         console.error("Fetch Error:", err);
@@ -129,11 +136,11 @@ router.get("/:id", (req, res) => {
 /* ============================================================
    4) UPDATE — Update full record
    PUT /api/general-expense-master/:id
-   body: { name, status }
+   body: { name, status, is_recurring, budget_limit }
 ============================================================ */
 router.put("/:id", (req, res) => {
   const { id } = req.params;
-  const { name, status } = req.body;
+  const { name, status, is_recurring, budget_limit } = req.body;
 
   if (!name) {
     return res
@@ -143,10 +150,16 @@ router.put("/:id", (req, res) => {
 
   const sql = `
     UPDATE general_expense_master
-    SET name = ?, status = ?
+    SET name = ?, status = ?, is_recurring = ?, budget_limit = ?
     WHERE id = ?
   `;
-  const values = [name, status || "1", id];
+  const values = [
+    name,
+    status || "1",
+    is_recurring ? 1 : 0,
+    budget_limit || null,
+    id,
+  ];
 
   db.query(sql, values, (err, result) => {
     if (err) {

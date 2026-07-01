@@ -1,33 +1,26 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db"); // tamara db.js no sachho relative path apjo
+const db = require("../db");
 
 /* ============================================================
-   helper — default to current month if no range given
+   helper — ISO date formatter
 ============================================================ */
-function getDefaultRange() {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const iso = (d) => d.toISOString().slice(0, 10);
-  return { from: iso(from), to: iso(to) };
+function iso(d) {
+  return d.toISOString().slice(0, 10);
 }
 
 /* ============================================================
    1) LOG AN EXPENSE ENTRY
    POST /api/net-profit/expense
-   body: { expense_master_id, amount, expense_date, notes }
 ============================================================ */
 router.post("/expense", (req, res) => {
   const { expense_master_id, amount, expense_date, notes } = req.body;
 
   if (!expense_master_id || !amount || !expense_date) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "expense_master_id, amount, expense_date required che",
-      });
+    return res.status(400).json({
+      success: false,
+      message: "expense_master_id, amount, expense_date required che",
+    });
   }
 
   const sql = `
@@ -39,32 +32,25 @@ router.post("/expense", (req, res) => {
   db.query(sql, values, (err, result) => {
     if (err) {
       console.error("Insert Error:", err);
-      return res
-        .status(500)
-        .json({ success: false, message: "Insert failed", error: err.message });
+      return res.status(500).json({ success: false, message: "Insert failed", error: err.message });
     }
-    res
-      .status(201)
-      .json({ success: true, message: "Expense logged", id: result.insertId });
+    res.status(201).json({ success: true, message: "Expense logged", id: result.insertId });
   });
 });
 
 /* ============================================================
    2) UPDATE AN EXPENSE ENTRY
    PUT /api/net-profit/expense/:id
-   body: { expense_master_id, amount, expense_date, notes }
 ============================================================ */
 router.put("/expense/:id", (req, res) => {
   const { id } = req.params;
   const { expense_master_id, amount, expense_date, notes } = req.body;
 
   if (!expense_master_id || !amount || !expense_date) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "expense_master_id, amount, expense_date required che",
-      });
+    return res.status(400).json({
+      success: false,
+      message: "expense_master_id, amount, expense_date required che",
+    });
   }
 
   const sql = `
@@ -77,14 +63,10 @@ router.put("/expense/:id", (req, res) => {
   db.query(sql, values, (err, result) => {
     if (err) {
       console.error("Update Error:", err);
-      return res
-        .status(500)
-        .json({ success: false, message: "Update failed", error: err.message });
+      return res.status(500).json({ success: false, message: "Update failed", error: err.message });
     }
     if (result.affectedRows === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Expense entry not found" });
+      return res.status(404).json({ success: false, message: "Expense entry not found" });
     }
     res.json({ success: true, message: "Expense entry updated" });
   });
@@ -97,104 +79,321 @@ router.put("/expense/:id", (req, res) => {
 router.delete("/expense/:id", (req, res) => {
   const { id } = req.params;
 
-  db.query(
-    "DELETE FROM general_expense_entry WHERE id = ?",
-    [id],
-    (err, result) => {
-      if (err) {
-        console.error("Delete Error:", err);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            message: "Delete failed",
-            error: err.message,
-          });
-      }
-      if (result.affectedRows === 0) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Expense entry not found" });
-      }
-      res.json({ success: true, message: "Expense entry deleted" });
-    },
-  );
+  db.query("DELETE FROM general_expense_entry WHERE id = ?", [id], (err, result) => {
+    if (err) {
+      console.error("Delete Error:", err);
+      return res.status(500).json({ success: false, message: "Delete failed", error: err.message });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Expense entry not found" });
+    }
+    res.json({ success: true, message: "Expense entry deleted" });
+  });
 });
 
 /* ============================================================
    4) NET PROFIT CALCULATION — the main page endpoint
    GET /api/net-profit?from=2026-06-01&to=2026-06-30
-   if from/to omitted, defaults to the current month
+   GET /api/net-profit                 <-- no params = LIFETIME (all records)
 ============================================================ */
 router.get("/", (req, res) => {
-  let { from, to } = req.query;
+  const { from, to } = req.query;
+  // TRUE only when the client explicitly sent both dates.
+  // If either is missing, we treat this as "lifetime" and skip date filtering entirely.
+  const hasRange = Boolean(from && to);
 
-  if (!from || !to) {
-    const def = getDefaultRange();
-    from = from || def.from;
-    to = to || def.to;
-  }
+  const projectSql = hasRange
+    ? `SELECT id, company_name, customer_name, quotation_no, quotation_date, net_revenue_amount
+       FROM project
+       WHERE quotation_date BETWEEN ? AND ?
+       ORDER BY quotation_date DESC`
+    : `SELECT id, company_name, customer_name, quotation_no, quotation_date, net_revenue_amount
+       FROM project
+       ORDER BY quotation_date DESC`;
+  const projectParams = hasRange ? [from, to] : [];
 
-  // 1) projects + net revenue in range
-  const projectSql = `
-    SELECT id, company_name, customer_name, quotation_no, quotation_date, net_revenue_amount
-    FROM project
-    WHERE quotation_date BETWEEN ? AND ?
-    ORDER BY quotation_date DESC
-  `;
-
-  db.query(projectSql, [from, to], (err, projectRows) => {
+  db.query(projectSql, projectParams, (err, projectRows) => {
     if (err) {
       console.error("Project Fetch Error:", err);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Project fetch failed",
-          error: err.message,
-        });
+      return res.status(500).json({ success: false, message: "Project fetch failed", error: err.message });
     }
 
-    // 2) expense entries + their type name, in range
-    const expenseSql = `
-      SELECT e.id, e.amount, e.expense_date, e.notes, m.name AS expense_name
-      FROM general_expense_entry e
-      JOIN general_expense_master m ON m.id = e.expense_master_id
-      WHERE e.expense_date BETWEEN ? AND ?
-      ORDER BY e.expense_date DESC
-    `;
+    const expenseSql = hasRange
+      ? `SELECT e.id, e.amount, e.expense_date, e.notes, m.name AS expense_name
+         FROM general_expense_entry e
+         JOIN general_expense_master m ON m.id = e.expense_master_id
+         WHERE e.expense_date BETWEEN ? AND ?
+         ORDER BY e.expense_date DESC`
+      : `SELECT e.id, e.amount, e.expense_date, e.notes, m.name AS expense_name
+         FROM general_expense_entry e
+         JOIN general_expense_master m ON m.id = e.expense_master_id
+         ORDER BY e.expense_date DESC`;
+    const expenseParams = hasRange ? [from, to] : [];
 
-    db.query(expenseSql, [from, to], (err2, expenseRows) => {
+    db.query(expenseSql, expenseParams, (err2, expenseRows) => {
       if (err2) {
         console.error("Expense Fetch Error:", err2);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            message: "Expense fetch failed",
-            error: err2.message,
-          });
+        return res.status(500).json({ success: false, message: "Expense fetch failed", error: err2.message });
       }
 
-      const netRevenue = projectRows.reduce(
-        (sum, p) => sum + Number(p.net_revenue_amount || 0),
-        0,
-      );
-      const totalExpense = expenseRows.reduce(
-        (sum, e) => sum + Number(e.amount || 0),
-        0,
-      );
+      const netRevenue = projectRows.reduce((sum, p) => sum + Number(p.net_revenue_amount || 0), 0);
+      const totalExpense = expenseRows.reduce((sum, e) => sum + Number(e.amount || 0), 0);
       const netProfit = netRevenue - totalExpense;
 
       res.json({
         success: true,
-        from,
-        to,
+        lifetime: !hasRange,
+        from: hasRange ? from : null,
+        to: hasRange ? to : null,
         netRevenue,
         totalExpense,
         netProfit,
         projects: projectRows,
         expenses: expenseRows,
+      });
+    });
+  });
+});
+
+/* ============================================================
+   5) ANALYTICS — for the Analytics tab (with period support)
+   GET /api/net-profit/analytics?from=2026-06-01&to=2026-06-30&period=monthly
+   GET /api/net-profit/analytics?period=monthly   <-- no from/to = LIFETIME
+============================================================ */
+router.get("/analytics", (req, res) => {
+  const { from, to } = req.query;
+  let { period } = req.query;
+  period = ["weekly", "monthly", "yearly"].includes(period) ? period : "monthly";
+
+  const hasRange = Boolean(from && to);
+
+  // Anchor date for the trend chart window (last 6 months / 8 weeks / 5 years).
+  // Always uses "to" if given, otherwise today — this keeps the trend chart
+  // showing a recent window even in lifetime mode (a chart with EVERY historical
+  // point would be unreadable, so lifetime mode widens totals/breakdowns to
+  // all-time but keeps the trend chart windowed to something visually useful).
+  const chartAnchor = hasRange ? to : iso(new Date());
+
+  // rangeDays / prev-period comparison only make sense when an explicit range
+  // is given. In lifetime mode we skip the "vs previous period" comparison.
+  let rangeDays = 0;
+  let prevFrom = null;
+  let prevTo = null;
+  if (hasRange) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    rangeDays = Math.round((toDate - fromDate) / 86400000) + 1;
+    const pTo = new Date(fromDate);
+    pTo.setDate(pTo.getDate() - 1);
+    const pFrom = new Date(pTo);
+    pFrom.setDate(pFrom.getDate() - rangeDays + 1);
+    prevTo = iso(pTo);
+    prevFrom = iso(pFrom);
+  }
+
+  const revenueSql = hasRange
+    ? `SELECT IFNULL(SUM(net_revenue_amount),0) AS total FROM project WHERE quotation_date BETWEEN ? AND ?`
+    : `SELECT IFNULL(SUM(net_revenue_amount),0) AS total FROM project`;
+  const revenueParams = hasRange ? [from, to] : [];
+
+  const expenseByTypeSql = hasRange
+    ? `SELECT m.id, m.name, m.budget_limit, IFNULL(SUM(e.amount),0) AS total
+       FROM general_expense_master m
+       LEFT JOIN general_expense_entry e
+         ON e.expense_master_id = m.id AND e.expense_date BETWEEN ? AND ?
+       WHERE m.status = '1'
+       GROUP BY m.id, m.name, m.budget_limit
+       ORDER BY total DESC`
+    : `SELECT m.id, m.name, m.budget_limit, IFNULL(SUM(e.amount),0) AS total
+       FROM general_expense_master m
+       LEFT JOIN general_expense_entry e
+         ON e.expense_master_id = m.id
+       WHERE m.status = '1'
+       GROUP BY m.id, m.name, m.budget_limit
+       ORDER BY total DESC`;
+  const expenseByTypeParams = hasRange ? [from, to] : [];
+
+  const topProjectsSql = hasRange
+    ? `SELECT company_name, quotation_no, net_revenue_amount
+       FROM project WHERE quotation_date BETWEEN ? AND ?
+       ORDER BY net_revenue_amount DESC LIMIT 5`
+    : `SELECT company_name, quotation_no, net_revenue_amount
+       FROM project
+       ORDER BY net_revenue_amount DESC LIMIT 5`;
+  const topProjectsParams = hasRange ? [from, to] : [];
+
+  const prevRevenueSql = `SELECT IFNULL(SUM(net_revenue_amount),0) AS total
+    FROM project WHERE quotation_date BETWEEN ? AND ?`;
+  const prevExpenseSql = `SELECT IFNULL(SUM(amount),0) AS total
+    FROM general_expense_entry WHERE expense_date BETWEEN ? AND ?`;
+
+  let chartRevSql, chartExpSql, chartParams;
+
+  if (period === "weekly") {
+    chartRevSql = `
+      SELECT YEARWEEK(quotation_date, 1) AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+      FROM project
+      WHERE quotation_date >= DATE_SUB(?, INTERVAL 8 WEEK)
+      GROUP BY bucket`;
+    chartExpSql = `
+      SELECT YEARWEEK(expense_date, 1) AS bucket, IFNULL(SUM(amount),0) AS expense
+      FROM general_expense_entry
+      WHERE expense_date >= DATE_SUB(?, INTERVAL 8 WEEK)
+      GROUP BY bucket`;
+    chartParams = [chartAnchor];
+  } else if (period === "yearly") {
+    chartRevSql = `
+      SELECT YEAR(quotation_date) AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+      FROM project
+      WHERE quotation_date >= DATE_SUB(?, INTERVAL 5 YEAR)
+      GROUP BY bucket`;
+    chartExpSql = `
+      SELECT YEAR(expense_date) AS bucket, IFNULL(SUM(amount),0) AS expense
+      FROM general_expense_entry
+      WHERE expense_date >= DATE_SUB(?, INTERVAL 5 YEAR)
+      GROUP BY bucket`;
+    chartParams = [chartAnchor];
+  } else {
+    chartRevSql = `
+      SELECT DATE_FORMAT(quotation_date, '%Y-%m') AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+      FROM project
+      WHERE quotation_date >= DATE_SUB(LAST_DAY(?), INTERVAL 5 MONTH) + INTERVAL 1 DAY
+      GROUP BY bucket`;
+    chartExpSql = `
+      SELECT DATE_FORMAT(expense_date, '%Y-%m') AS bucket, IFNULL(SUM(amount),0) AS expense
+      FROM general_expense_entry
+      WHERE expense_date >= DATE_SUB(LAST_DAY(?), INTERVAL 5 MONTH) + INTERVAL 1 DAY
+      GROUP BY bucket`;
+    chartParams = [chartAnchor];
+  }
+
+  db.query(revenueSql, revenueParams, (e1, revRows) => {
+    if (e1) return res.status(500).json({ success: false, message: e1.message });
+
+    db.query(expenseByTypeSql, expenseByTypeParams, (e2, expRows) => {
+      if (e2) return res.status(500).json({ success: false, message: e2.message });
+
+      db.query(topProjectsSql, topProjectsParams, (e3, projRows) => {
+        if (e3) return res.status(500).json({ success: false, message: e3.message });
+
+        const afterPrevPeriod = (prevRevRows, prevExpRows) => {
+          db.query(chartRevSql, chartParams, (e6, chartRevRows) => {
+            if (e6) return res.status(500).json({ success: false, message: e6.message });
+
+            db.query(chartExpSql, chartParams, (e7, chartExpRows) => {
+              if (e7) return res.status(500).json({ success: false, message: e7.message });
+
+              const netRevenue = Number(revRows[0].total || 0);
+              const totalExpense = expRows.reduce((s, r) => s + Number(r.total || 0), 0);
+              const netProfit = netRevenue - totalExpense;
+              const profitMargin = netRevenue > 0 ? Math.round((netProfit / netRevenue) * 100) : 0;
+
+              const prevRevenue = Number(prevRevRows[0].total || 0);
+              const prevExpense = Number(prevExpRows[0].total || 0);
+              const revenueChangePct = prevRevenue > 0
+                ? Math.round(((netRevenue - prevRevenue) / prevRevenue) * 100) : 0;
+              const expenseChangePct = prevExpense > 0
+                ? Math.round(((totalExpense - prevExpense) / prevExpense) * 100) : 0;
+
+              const avgDailyExpense = rangeDays > 0 ? Math.round(totalExpense / rangeDays) : 0;
+
+              let chartData = [];
+
+              if (period === "weekly") {
+                const base = new Date(chartAnchor);
+                for (let i = 7; i >= 0; i--) {
+                  const d = new Date(base);
+                  d.setDate(d.getDate() - i * 7);
+                  const tmp = new Date(d);
+                  const dayNum = (tmp.getDay() + 6) % 7;
+                  tmp.setDate(tmp.getDate() - dayNum + 3);
+                  const firstThursday = new Date(tmp.getFullYear(), 0, 4);
+                  const weekNo = 1 + Math.round(((tmp - firstThursday) / 86400000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7);
+                  const bucketKey = Number(`${tmp.getFullYear()}${String(weekNo).padStart(2, "0")}`);
+                  const revRow = chartRevRows.find((r) => Number(r.bucket) === bucketKey);
+                  const expRow = chartExpRows.find((r) => Number(r.bucket) === bucketKey);
+                  chartData.push({
+                    month: `W${weekNo}`,
+                    revenue: Number(revRow ? revRow.revenue : 0),
+                    expense: Number(expRow ? expRow.expense : 0),
+                  });
+                }
+              } else if (period === "yearly") {
+                const base = new Date(chartAnchor);
+                for (let i = 4; i >= 0; i--) {
+                  const y = base.getFullYear() - i;
+                  const revRow = chartRevRows.find((r) => Number(r.bucket) === y);
+                  const expRow = chartExpRows.find((r) => Number(r.bucket) === y);
+                  chartData.push({
+                    month: String(y),
+                    revenue: Number(revRow ? revRow.revenue : 0),
+                    expense: Number(expRow ? expRow.expense : 0),
+                  });
+                }
+              } else {
+                const base = new Date(chartAnchor);
+                for (let i = 5; i >= 0; i--) {
+                  const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+                  const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                  const label = d.toLocaleString("en-US", { month: "short" });
+                  const revRow = chartRevRows.find((r) => r.bucket === ym);
+                  const expRow = chartExpRows.find((r) => r.bucket === ym);
+                  chartData.push({
+                    month: label,
+                    revenue: Number(revRow ? revRow.revenue : 0),
+                    expense: Number(expRow ? expRow.expense : 0),
+                  });
+                }
+              }
+
+              res.json({
+                success: true,
+                lifetime: !hasRange,
+                from: hasRange ? from : null,
+                to: hasRange ? to : null,
+                period,
+                profitMargin,
+                revenueChangePct,
+                expenseChangePct,
+                avgDailyExpense,
+                monthly: chartData,
+                expenseBreakdown: expRows
+                  .filter((r) => Number(r.total) > 0)
+                  .map((r) => ({ name: r.name, amount: Number(r.total) })),
+                topExpenseCategories: expRows
+                  .filter((r) => Number(r.total) > 0)
+                  .sort((a, b) => b.total - a.total)
+                  .slice(0, 5)
+                  .map((r) => ({ name: r.name, amount: Number(r.total) })),
+                topProjects: projRows.map((p) => ({
+                  name: p.company_name,
+                  quotation_no: p.quotation_no,
+                  amount: Number(p.net_revenue_amount),
+                })),
+                budgetTracking: expRows.map((r) => ({
+                  name: r.name,
+                  spent: Number(r.total),
+                  budget: r.budget_limit != null ? Number(r.budget_limit) : null,
+                })),
+              });
+            });
+          });
+        };
+
+        // Only run "previous period" comparison queries when an explicit range was given.
+        if (hasRange) {
+          db.query(prevRevenueSql, [prevFrom, prevTo], (e4, prevRevRows) => {
+            if (e4) return res.status(500).json({ success: false, message: e4.message });
+
+            db.query(prevExpenseSql, [prevFrom, prevTo], (e5, prevExpRows) => {
+              if (e5) return res.status(500).json({ success: false, message: e5.message });
+              afterPrevPeriod(prevRevRows, prevExpRows);
+            });
+          });
+        } else {
+          // lifetime mode: no meaningful "previous period" — pass zeroed rows
+          afterPrevPeriod([{ total: 0 }], [{ total: 0 }]);
+        }
       });
     });
   });
