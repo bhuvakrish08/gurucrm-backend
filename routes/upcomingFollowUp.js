@@ -33,23 +33,36 @@ router.get(
   async (req, res) => {
     try {
       const [rows] = await db.promise().query(`
-        SELECT lead_id, company_name, customer_name, mobile_no,
-               assignee, status, follow_up_date
-        FROM (
-          SELECT l.lead_id, l.company_name, l.customer_name, l.mobile_no,
-                 l.assignee, l.status, lf.follow_up_date,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY l.lead_id
-                   ORDER BY lf.follow_up_id DESC
-                 ) AS rn
-          FROM lead l
-          INNER JOIN lead_follow_up lf
-            ON lf.lead_id = l.lead_id
-          WHERE (l.status IS NULL OR l.status NOT IN ('Won', 'Lost'))
-        ) ranked
-        WHERE rn = 1
-          AND follow_up_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
-        ORDER BY follow_up_date ASC
+        SELECT
+    lead_id,
+    company_name,
+    customer_name,
+    mobile_no,
+    assignee,
+    status,
+    follow_up_date,
+    'lead' AS type
+FROM (
+    SELECT
+        l.lead_id,
+        l.company_name,
+        l.customer_name,
+        l.mobile_no,
+        l.assignee,
+        l.status,
+        lf.follow_up_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY l.lead_id
+            ORDER BY lf.follow_up_id DESC
+        ) AS rn
+    FROM lead l
+    INNER JOIN lead_follow_up lf
+        ON lf.lead_id = l.lead_id
+    WHERE (l.status IS NULL OR l.status NOT IN ('Won', 'Lost'))
+) ranked
+WHERE rn = 1
+  AND follow_up_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
+ORDER BY follow_up_date ASC;
       `);
 
       console.log("🔍 RAW ROWS FROM DB:", rows); // 👈 temporary debug line
@@ -71,28 +84,47 @@ router.get(
   async (req, res) => {
     try {
       const [rows] = await db.promise().query(`
-        SELECT quotation_id, lead_id, company_name, customer_name,
-               quotation_no, assignee, quotation_status, follow_up_date
-        FROM (
-          SELECT q.id AS quotation_id, q.lead_id, q.company_name, q.customer_name,
-                 qr.quotation_no, q.assignee, q.quotation_status, qr.follow_up_date,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY q.id
-                   ORDER BY qr.id DESC
-                 ) AS rn
-          FROM quotation q
-          INNER JOIN (
-            SELECT lead_id, MAX(id) AS latest_id
-            FROM quotation
-            GROUP BY lead_id
-          ) latest ON latest.latest_id = q.id
-          INNER JOIN quotation_revision qr
-            ON qr.quotation_id = q.id
-          WHERE (q.quotation_status IS NULL OR q.quotation_status NOT IN ('Won','Lost','Approved','Declined'))
-        ) ranked
-        WHERE rn = 1
-          AND follow_up_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
-        ORDER BY follow_up_date ASC
+        SELECT
+    quotation_id,
+    lead_id,
+    company_name,
+    customer_name,
+    quotation_no,
+    assignee,
+    quotation_status,
+    follow_up_date,
+    'quotation' AS type
+FROM (
+    SELECT
+        q.id AS quotation_id,
+        q.lead_id,
+        q.company_name,
+        q.customer_name,
+        qr.quotation_no,
+        q.assignee,
+        q.quotation_status,
+        qr.follow_up_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY q.id
+            ORDER BY qr.id DESC
+        ) AS rn
+    FROM quotation q
+    INNER JOIN (
+        SELECT lead_id, MAX(id) AS latest_id
+        FROM quotation
+        GROUP BY lead_id
+    ) latest
+        ON latest.latest_id = q.id
+    INNER JOIN quotation_revision qr
+        ON qr.quotation_id = q.id
+    WHERE (
+        q.quotation_status IS NULL
+        OR q.quotation_status NOT IN ('Won','Lost','Approved','Declined')
+    )
+) ranked
+WHERE rn = 1
+  AND follow_up_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
+ORDER BY follow_up_date ASC;
       `);
 
       console.log("🔍 RAW QUOTATION ROWS FROM DB:", rows);
