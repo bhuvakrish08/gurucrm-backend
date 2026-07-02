@@ -159,6 +159,14 @@ router.get("/", (req, res) => {
    5) ANALYTICS — for the Analytics tab (with period support)
    GET /api/net-profit/analytics?from=2026-06-01&to=2026-06-30&period=monthly
    GET /api/net-profit/analytics?period=monthly   <-- no from/to = LIFETIME
+
+   NOTE: the "monthly" (trend chart) array now carries FOUR values per
+   bucket so the frontend can render Amount vs Architecture Net vs
+   Expense Net vs General Expense, side by side, for weekly/monthly/yearly:
+     - amount            -> SUM(project.amount)
+     - architecture_net  -> SUM(project.architecture_net_amount)
+     - expense_net       -> SUM(project.expense_net_amount)
+     - expense           -> SUM(general_expense_entry.amount)   (General Expense)
 ============================================================ */
 router.get("/analytics", (req, res) => {
   const { from, to } = req.query;
@@ -227,11 +235,16 @@ router.get("/analytics", (req, res) => {
   const prevExpenseSql = `SELECT IFNULL(SUM(amount),0) AS total
     FROM general_expense_entry WHERE expense_date BETWEEN ? AND ?`;
 
-  let chartRevSql, chartExpSql, chartParams;
+  // chartProjectSql -> per-bucket SUM(amount), SUM(architecture_net_amount), SUM(expense_net_amount) from `project`
+  // chartExpSql     -> per-bucket SUM(amount) from `general_expense_entry` (General Expense)
+  let chartProjectSql, chartExpSql, chartParams;
 
   if (period === "weekly") {
-    chartRevSql = `
-      SELECT YEARWEEK(quotation_date, 1) AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+    chartProjectSql = `
+      SELECT YEARWEEK(quotation_date, 1) AS bucket,
+        IFNULL(SUM(amount),0) AS amount,
+        IFNULL(SUM(architecture_net_amount),0) AS architecture_net,
+        IFNULL(SUM(expense_net_amount),0) AS expense_net
       FROM project
       WHERE quotation_date >= DATE_SUB(?, INTERVAL 8 WEEK)
       GROUP BY bucket`;
@@ -242,8 +255,11 @@ router.get("/analytics", (req, res) => {
       GROUP BY bucket`;
     chartParams = [chartAnchor];
   } else if (period === "yearly") {
-    chartRevSql = `
-      SELECT YEAR(quotation_date) AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+    chartProjectSql = `
+      SELECT YEAR(quotation_date) AS bucket,
+        IFNULL(SUM(amount),0) AS amount,
+        IFNULL(SUM(architecture_net_amount),0) AS architecture_net,
+        IFNULL(SUM(expense_net_amount),0) AS expense_net
       FROM project
       WHERE quotation_date >= DATE_SUB(?, INTERVAL 5 YEAR)
       GROUP BY bucket`;
@@ -254,8 +270,11 @@ router.get("/analytics", (req, res) => {
       GROUP BY bucket`;
     chartParams = [chartAnchor];
   } else {
-    chartRevSql = `
-      SELECT DATE_FORMAT(quotation_date, '%Y-%m') AS bucket, IFNULL(SUM(net_revenue_amount),0) AS revenue
+    chartProjectSql = `
+      SELECT DATE_FORMAT(quotation_date, '%Y-%m') AS bucket,
+        IFNULL(SUM(amount),0) AS amount,
+        IFNULL(SUM(architecture_net_amount),0) AS architecture_net,
+        IFNULL(SUM(expense_net_amount),0) AS expense_net
       FROM project
       WHERE quotation_date >= DATE_SUB(LAST_DAY(?), INTERVAL 5 MONTH) + INTERVAL 1 DAY
       GROUP BY bucket`;
@@ -277,7 +296,7 @@ router.get("/analytics", (req, res) => {
         if (e3) return res.status(500).json({ success: false, message: e3.message });
 
         const afterPrevPeriod = (prevRevRows, prevExpRows) => {
-          db.query(chartRevSql, chartParams, (e6, chartRevRows) => {
+          db.query(chartProjectSql, chartParams, (e6, chartProjectRows) => {
             if (e6) return res.status(500).json({ success: false, message: e6.message });
 
             db.query(chartExpSql, chartParams, (e7, chartExpRows) => {
@@ -310,11 +329,13 @@ router.get("/analytics", (req, res) => {
                   const firstThursday = new Date(tmp.getFullYear(), 0, 4);
                   const weekNo = 1 + Math.round(((tmp - firstThursday) / 86400000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7);
                   const bucketKey = Number(`${tmp.getFullYear()}${String(weekNo).padStart(2, "0")}`);
-                  const revRow = chartRevRows.find((r) => Number(r.bucket) === bucketKey);
+                  const projRow = chartProjectRows.find((r) => Number(r.bucket) === bucketKey);
                   const expRow = chartExpRows.find((r) => Number(r.bucket) === bucketKey);
                   chartData.push({
                     month: `W${weekNo}`,
-                    revenue: Number(revRow ? revRow.revenue : 0),
+                    amount: Number(projRow ? projRow.amount : 0),
+                    architecture_net: Number(projRow ? projRow.architecture_net : 0),
+                    expense_net: Number(projRow ? projRow.expense_net : 0),
                     expense: Number(expRow ? expRow.expense : 0),
                   });
                 }
@@ -322,11 +343,13 @@ router.get("/analytics", (req, res) => {
                 const base = new Date(chartAnchor);
                 for (let i = 4; i >= 0; i--) {
                   const y = base.getFullYear() - i;
-                  const revRow = chartRevRows.find((r) => Number(r.bucket) === y);
+                  const projRow = chartProjectRows.find((r) => Number(r.bucket) === y);
                   const expRow = chartExpRows.find((r) => Number(r.bucket) === y);
                   chartData.push({
                     month: String(y),
-                    revenue: Number(revRow ? revRow.revenue : 0),
+                    amount: Number(projRow ? projRow.amount : 0),
+                    architecture_net: Number(projRow ? projRow.architecture_net : 0),
+                    expense_net: Number(projRow ? projRow.expense_net : 0),
                     expense: Number(expRow ? expRow.expense : 0),
                   });
                 }
@@ -336,11 +359,13 @@ router.get("/analytics", (req, res) => {
                   const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
                   const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
                   const label = d.toLocaleString("en-US", { month: "short" });
-                  const revRow = chartRevRows.find((r) => r.bucket === ym);
+                  const projRow = chartProjectRows.find((r) => r.bucket === ym);
                   const expRow = chartExpRows.find((r) => r.bucket === ym);
                   chartData.push({
                     month: label,
-                    revenue: Number(revRow ? revRow.revenue : 0),
+                    amount: Number(projRow ? projRow.amount : 0),
+                    architecture_net: Number(projRow ? projRow.architecture_net : 0),
+                    expense_net: Number(projRow ? projRow.expense_net : 0),
                     expense: Number(expRow ? expRow.expense : 0),
                   });
                 }
