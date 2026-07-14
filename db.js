@@ -5,32 +5,51 @@ const db = mysql.createPool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  port: process.env.DB_PORT,
+  port: Number(process.env.DB_PORT) || 3306,
+
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
-  dateStrings: true, // ✅ FIX: DATE/DATETIME columns string tarike aave, JS Date object nahi (timezone shift band)
+  maxIdle: 10,
+  idleTimeout: 60000,
+  queueLimit: 100,
+
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+
+  connectTimeout: 10000,
+
+  dateStrings: true,
 });
 
-// Test connection
+// Test database connection on startup
 db.getConnection((err, connection) => {
   if (err) {
-    console.error("❌ Database connection failed:", err);
-  } else {
-    console.log("✅ Connected to MySQL database");
-    connection.release();
+    console.error("❌ Database connection failed:", {
+      code: err.code,
+      message: err.message,
+    });
+    return;
   }
+
+  console.log("✅ Connected to MySQL database");
+  connection.release();
 });
 
-// Keep database alive every 5 minutes
-setInterval(() => {
+// Database health check every 5 minutes
+const keepAliveInterval = setInterval(() => {
   db.query("SELECT 1", (err) => {
     if (err) {
-      console.error("Keep alive query failed:", err);
-    } else {
-      console.log("⏱️ Database keep-alive ping sent");
+      console.error("❌ Database keep-alive failed:", {
+        code: err.code,
+        message: err.message,
+      });
+      return;
     }
+
+    console.log("⏱️ Database keep-alive successful");
   });
 }, 5 * 60 * 1000);
+
+keepAliveInterval.unref();
 
 module.exports = db;
