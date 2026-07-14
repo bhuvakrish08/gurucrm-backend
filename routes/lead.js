@@ -6,8 +6,7 @@ const cloudinary = require("../utils/cloudinary");
 const router = express.Router();
 // 🚦 Traffic light thresholds from .env
 const YELLOW_HOURS = parseFloat(process.env.YELLOW_HOURS) || 24;
-const RED_HOURS    = parseFloat(process.env.RED_HOURS)    || 48;
-
+const RED_HOURS = parseFloat(process.env.RED_HOURS) || 48;
 
 /* =====================================
    READ ALL LEADS (for table listing)
@@ -15,13 +14,16 @@ const RED_HOURS    = parseFloat(process.env.RED_HOURS)    || 48;
 router.get("/read", authenticateAndAuthorize(), (req, res) => {
   const loggedInRole = req.user.role;
 
-  db.query("SELECT name FROM users WHERE id = ?", [req.user.id], (err, uRows) => {
-    let loggedInUser = req.user.username;
-    if (!err && uRows && uRows.length > 0) {
-      loggedInUser = uRows[0].name;
-    }
+  db.query(
+    "SELECT name FROM users WHERE id = ?",
+    [req.user.id],
+    (err, uRows) => {
+      let loggedInUser = req.user.username;
+      if (!err && uRows && uRows.length > 0) {
+        loggedInUser = uRows[0].name;
+      }
 
-    let sql = `
+      let sql = `
       SELECT 
     l.lead_id,
     l.company_name,
@@ -30,6 +32,8 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     l.reference,
     COALESCE(ls.name, l.source) AS source,
     l.assignee,
+    l.location,
+    l.architecture,
     l.status,
     l.lost_reason,
     l.created_at,
@@ -69,31 +73,32 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       ) last_fu ON last_fu.lead_id = l.lead_id
     `;
 
-    let values = [];
+      let values = [];
 
-    if (
-      loggedInRole !== "Admin" &&
-      loggedInRole !== "Super Admin" &&
-      loggedInRole !== "Leads Management" &&
-      loggedInRole !== "Sales" &&
-      loggedInRole !== "Estimation"
-    ) {
-      sql += `
+      if (
+        loggedInRole !== "Admin" &&
+        loggedInRole !== "Super Admin" &&
+        loggedInRole !== "Leads Management" &&
+        loggedInRole !== "Sales" &&
+        loggedInRole !== "Estimation"
+      ) {
+        sql += `
         WHERE (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)
       `;
-      values.push(loggedInUser, loggedInUser);
-    }
-
-    sql += ` ORDER BY l.lead_id DESC`;
-
-    db.query(sql, values, (err, result) => {
-      if (err) {
-        console.log(err);
-        return res.status(500).json({ success: false, error: err });
+        values.push(loggedInUser, loggedInUser);
       }
-      res.json({ success: true, result });
-    });
-  });
+
+      sql += ` ORDER BY l.lead_id DESC`;
+
+      db.query(sql, values, (err, result) => {
+        if (err) {
+          console.log(err);
+          return res.status(500).json({ success: false, error: err });
+        }
+        res.json({ success: true, result });
+      });
+    },
+  );
 });
 
 /* =====================================
@@ -135,7 +140,8 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
     loggedInRole !== "Sales" &&
     loggedInRole !== "Estimation"
   ) {
-    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+    sql +=
+      " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
     values.push(loggedInUser, loggedInUser);
   }
 
@@ -152,80 +158,108 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
 /* =====================================
    VIEW SINGLE LEAD DETAILS (for View Modal)
 ===================================== */
-router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, res) => {
-  const id = req.params.id;
+router.get(
+  "/sales/leads/view-details/:id",
+  authenticateAndAuthorize(),
+  (req, res) => {
+    const id = req.params.id;
 
-  const sql = `
+    const sql = `
     SELECT
-      l.lead_id,
-      l.company_name,
-      l.customer_name,
-      l.mobile_no,
-      l.reference,
-      COALESCE(ls.name, l.source) AS source,
-      l.priority,
-      l.assignee,
-      lc.name AS category,
-      l.description,
-      l.status,
-      l.lost_reason,
-      l.created_at,
-      l.updated_by,
-      l.updated_at
-    FROM lead l
-    LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
-    LEFT JOIN inquiry_lead_category lc ON lc.id = l.category
-    WHERE l.lead_id = ?
+    l.lead_id,
+    l.company_name,
+    l.customer_name,
+    l.mobile_no,
+    l.reference,
+
+    COALESCE(ls.name,l.source) AS source,
+
+    l.location,
+    l.architecture,
+
+    l.priority,
+    l.assignee,
+
+    lc.name AS category,
+
+    l.description,
+    l.status,
+    l.lost_reason,
+
+    l.created_at,
+    l.updated_by,
+    l.updated_at
+
+FROM lead l
+
+LEFT JOIN inquiry_lead_source ls
+ON ls.id=l.source
+
+LEFT JOIN inquiry_lead_category lc
+ON lc.id=l.category
+
+WHERE l.lead_id=?
   `;
 
-  db.query(sql, [id], (err, result) => {
-    if (err) {
-      console.log(err);
-      return res.status(500).json({ success: false, error: err });
-    }
-    if (!result || result.length === 0) {
-      return res.status(404).json({ success: false, message: "Lead not found" });
-    }
-    res.json({ success: true, lead: result[0] });
-  });
-});
+    db.query(sql, [id], (err, result) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({ success: false, error: err });
+      }
+      if (!result || result.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Lead not found" });
+      }
+      res.json({ success: true, lead: result[0] });
+    });
+  },
+);
 
 /* =====================================
    VIEW SINGLE LEAD (for Edit page)
    ✅ FIXED: removed double comma after l.mobile_no
 ===================================== */
-router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res) => {
-  const id = req.params.id;
+router.get(
+  "/sales/leads/view-leads/:id",
+  authenticateAndAuthorize(),
+  (req, res) => {
+    const id = req.params.id;
 
-  const sql = `
+    const sql = `
     SELECT
-      l.lead_id,
-      l.company_name,
-      l.customer_name,
-      l.mobile_no,
-      l.reference,
-      l.source,
-      l.priority,
-      l.assignee,
-      l.category,
-      l.description,
-      l.status,
-      l.lost_reason,
-      l.created_at
-    FROM lead l
-    WHERE l.lead_id = ?
+    l.lead_id,
+    l.company_name,
+    l.customer_name,
+    l.mobile_no,
+    l.reference,
+    l.source,
+    l.location,
+    l.architecture,
+    l.priority,
+    l.assignee,
+    l.category,
+    l.description,
+    l.status,
+    l.lost_reason,
+    l.created_at
+FROM lead l
+WHERE l.lead_id = ?
   `;
 
-  db.query(sql, [id], (err, result) => {
-    if (err) {
-      return res.status(500).json({ success: false, error: err });
-    }
-    if (!result || result.length === 0) {
-      return res.status(404).json({ success: false, message: "Lead not found" });
-    }
-    res.json({ success: true, lead: result[0] });
-  });
-});
+    db.query(sql, [id], (err, result) => {
+      if (err) {
+        return res.status(500).json({ success: false, error: err });
+      }
+      if (!result || result.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Lead not found" });
+      }
+      res.json({ success: true, lead: result[0] });
+    });
+  },
+);
 
 /* =====================================
    UPDATE LEAD
@@ -236,9 +270,11 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
-    mobile_no,       // ✅ ADDED
+    mobile_no, // ✅ ADDED
     reference,
     source,
+    location,
+    architecture,
     status,
     priority,
     assignee,
@@ -248,69 +284,85 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
 
   const updated_by = req.user.username;
 
-  db.query("SELECT status FROM lead WHERE lead_id = ?", [leadId], (err, rows) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ success: false, message: "Database error", error: err });
-    }
+  db.query(
+    "SELECT status FROM lead WHERE lead_id = ?",
+    [leadId],
+    (err, rows) => {
+      if (err) {
+        console.error(err);
+        return res
+          .status(500)
+          .json({ success: false, message: "Database error", error: err });
+      }
 
-    if (
-      rows &&
-      rows.length > 0 &&
-      rows[0].status === "Won" &&
-      status !== "Won" &&
-      req.user.role !== "Admin" &&
-      req.user.role !== "Super Admin"
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "Only Admin can change status after lead is Won",
-      });
-    }
+      if (
+        rows &&
+        rows.length > 0 &&
+        rows[0].status === "Won" &&
+        status !== "Won" &&
+        req.user.role !== "Admin" &&
+        req.user.role !== "Super Admin"
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Only Admin can change status after lead is Won",
+        });
+      }
 
-    const sql = `
+      const sql = `
       UPDATE lead
-      SET 
-        company_name = ?,
-        customer_name = ?,
-        mobile_no = ?,
-        reference = ?,
-        source = ?,
-        status = ?,
-        priority = ?,
-        assignee = ?,
-        category = ?,
-        description = ?,
-        updated_by = ?,
+      SET
+company_name=?,
+customer_name=?,
+mobile_no=?,
+reference=?,
+source=?,
+location=?,
+architecture=?,
+status=?,
+priority=?,
+assignee=?,
+category=?,
+description=?,
+updated_by=?,
         updated_at = CURRENT_TIMESTAMP
       WHERE lead_id = ?
     `;
 
-    db.query(
-      sql,
-      [
-        company_name,
-        customer_name,
-        mobile_no || null,   // ✅ ADDED
-        reference,
-        source,
-        status,
-        priority,
-        assignee,
-        category,
-        description,
-        updated_by,
-        leadId,
-      ],
-      (err, result) => {
-        if (err) {
-          console.error(err);
-          return res.status(500).json({ success: false, message: "Error updating lead", error: err });
-        }
-        res.json({ success: true, message: "Lead updated successfully" });
-      }
-    );
-  });
+      db.query(
+        sql,
+        [
+company_name,
+customer_name,
+mobile_no,
+reference,
+source,
+location,
+architecture,
+status,
+priority,
+assignee,
+category,
+description,
+updated_by,
+leadId
+],
+        (err, result) => {
+          if (err) {
+            console.error(err);
+            return res
+              .status(500)
+              .json({
+                success: false,
+                message: "Error updating lead",
+                error: err,
+              });
+          }
+          res.json({ success: true, message: "Lead updated successfully" });
+        },
+      );
+    },
+  );
 });
 
 /* =====================================
@@ -325,44 +377,49 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
   const {
     company_name,
     customer_name,
-    mobile_no,       // ✅ ADDED
+    mobile_no,
     reference,
     source,
+    location,
+    architecture,
     status,
     priority,
     assignee,
     category,
     description,
   } = req.body;
-
   const sql = `
     INSERT INTO \`lead\`
     (
       company_name,
-      customer_name,
-      mobile_no,
-      reference,
-      source,
-      status,
-      priority,
-      assignee,
-      category,
-      description,
-      created_by
+customer_name,
+mobile_no,
+reference,
+source,
+location,
+architecture,
+status,
+priority,
+assignee,
+category,
+description,
+created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?,?,?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
     company_name,
     customer_name,
-    mobile_no || null,   // ✅ ADDED
+    mobile_no,
     reference,
-    source || null,
+    source,
+    location,
+    architecture,
     status,
-    priority || null,
+    priority,
     assignee,
-    category || null,
+    category,
     description,
     userName,
   ];
@@ -383,7 +440,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
       [activityMsg, userName],
       (actErr) => {
         if (actErr) console.error("Activity log error:", actErr);
-      }
+      },
     );
 
     res.json({
@@ -415,7 +472,9 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
   db.query("SELECT status FROM lead WHERE lead_id = ?", [id], (err, rows) => {
     if (err) {
       console.log(err);
-      return res.status(500).json({ success: false, message: "Database error", error: err });
+      return res
+        .status(500)
+        .json({ success: false, message: "Database error", error: err });
     }
 
     if (
@@ -452,23 +511,41 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
        WHERE l.lead_id = ?`,
       [id],
       (fetchErr, fetchRows) => {
-        const hoursElapsed = (!fetchErr && fetchRows && fetchRows[0]) ? parseFloat(fetchRows[0].hours_elapsed || 0) : 0;
-        const assigneeVal  = (!fetchErr && fetchRows && fetchRows[0]) ? (fetchRows[0].assignee || updated_by) : updated_by;
-        const storedColor  = (!fetchErr && fetchRows && fetchRows[0]) ? (fetchRows[0].followup_status || "green") : "green";
+        const hoursElapsed =
+          !fetchErr && fetchRows && fetchRows[0]
+            ? parseFloat(fetchRows[0].hours_elapsed || 0)
+            : 0;
+        const assigneeVal =
+          !fetchErr && fetchRows && fetchRows[0]
+            ? fetchRows[0].assignee || updated_by
+            : updated_by;
+        const storedColor =
+          !fetchErr && fetchRows && fetchRows[0]
+            ? fetchRows[0].followup_status || "green"
+            : "green";
 
         let statusColor = "green";
-        if (storedColor === "red" || hoursElapsed >= RED_HOURS) statusColor = "red";
-        else if (storedColor === "yellow" || hoursElapsed >= YELLOW_HOURS) statusColor = "yellow";
+        if (storedColor === "red" || hoursElapsed >= RED_HOURS)
+          statusColor = "red";
+        else if (storedColor === "yellow" || hoursElapsed >= YELLOW_HOURS)
+          statusColor = "yellow";
 
         // Log the status update event
         db.query(
           `INSERT INTO lead_followup_status_log
            (lead_id, assignee, status_color, hours_elapsed, trigger_event)
            VALUES (?, ?, ?, ?, ?)`,
-          [id, assigneeVal, statusColor, hoursElapsed, `status_updated_to_${status.toLowerCase()}`],
+          [
+            id,
+            assigneeVal,
+            statusColor,
+            hoursElapsed,
+            `status_updated_to_${status.toLowerCase()}`,
+          ],
           (logErr) => {
-            if (logErr) console.error("Traffic light status update log error:", logErr);
-          }
+            if (logErr)
+              console.error("Traffic light status update log error:", logErr);
+          },
         );
 
         let sql;
@@ -507,13 +584,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
               updated_at = CURRENT_TIMESTAMP
             WHERE lead_id = ?
           `;
-          values = [
-            status,
-            lost_reason.trim(),
-            updated_by,
-            statusColor,
-            id,
-          ];
+          values = [status, lost_reason.trim(), updated_by, statusColor, id];
         } else {
           sql = `
             UPDATE \`lead\`
@@ -525,12 +596,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
               updated_at = CURRENT_TIMESTAMP
             WHERE lead_id = ?
           `;
-          values = [
-            status,
-            updated_by,
-            statusColor,
-            id,
-          ];
+          values = [status, updated_by, statusColor, id];
         }
 
         db.query(sql, values, (err, result) => {
@@ -548,9 +614,8 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
             message: "Status updated successfully",
           });
         });
-      }
+      },
     );
-
   });
 });
 
@@ -564,84 +629,101 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
     await db.promise().query("START TRANSACTION");
 
     // 1. Check if lead exists
-    const [lead] = await db.promise().query("SELECT lead_id FROM `lead` WHERE lead_id = ?", [leadId]);
+    const [lead] = await db
+      .promise()
+      .query("SELECT lead_id FROM `lead` WHERE lead_id = ?", [leadId]);
     if (lead.length === 0) {
       await db.promise().query("ROLLBACK");
       return res.status(404).json({ message: "Lead not found" });
     }
 
     // 2. Fetch all quotations linked to this lead
-    const [quotations] = await db.promise().query("SELECT id FROM quotation WHERE lead_id = ?", [leadId]);
+    const [quotations] = await db
+      .promise()
+      .query("SELECT id FROM quotation WHERE lead_id = ?", [leadId]);
     const quotationIds = quotations.map((q) => q.id);
 
     if (quotationIds.length > 0) {
       // 2a. Delete PI follow-up details
-      await db.promise().query(
-        "DELETE FROM pi_follow_up WHERE pi_id IN (SELECT pi_id FROM proforma_invoices WHERE quotation_id IN (?))",
-        [quotationIds]
-      );
+      await db
+        .promise()
+        .query(
+          "DELETE FROM pi_follow_up WHERE pi_id IN (SELECT pi_id FROM proforma_invoices WHERE quotation_id IN (?))",
+          [quotationIds],
+        );
 
       // 2b. Delete proforma invoices
-      await db.promise().query(
-        "DELETE FROM proforma_invoices WHERE quotation_id IN (?)",
-        [quotationIds]
-      );
+      await db
+        .promise()
+        .query("DELETE FROM proforma_invoices WHERE quotation_id IN (?)", [
+          quotationIds,
+        ]);
 
       // 2c. Fetch all projects associated with these quotations
-      const [projects] = await db.promise().query(
-        "SELECT id FROM project WHERE quotation_id IN (?)",
-        [quotationIds]
-      );
+      const [projects] = await db
+        .promise()
+        .query("SELECT id FROM project WHERE quotation_id IN (?)", [
+          quotationIds,
+        ]);
       const projectIds = projects.map((p) => p.id);
 
       if (projectIds.length > 0) {
         // Delete project architectures
-        await db.promise().query(
-          "DELETE FROM project_architecture WHERE project_id IN (?)",
-          [projectIds]
-        );
+        await db
+          .promise()
+          .query("DELETE FROM project_architecture WHERE project_id IN (?)", [
+            projectIds,
+          ]);
         // Delete project expenses
-        await db.promise().query(
-          "DELETE FROM project_expense WHERE project_id IN (?)",
-          [projectIds]
-        );
+        await db
+          .promise()
+          .query("DELETE FROM project_expense WHERE project_id IN (?)", [
+            projectIds,
+          ]);
         // Delete projects
-        await db.promise().query(
-          "DELETE FROM project WHERE id IN (?)",
-          [projectIds]
-        );
+        await db
+          .promise()
+          .query("DELETE FROM project WHERE id IN (?)", [projectIds]);
       }
 
       // 2d. Fetch and delete quotation revisions & their files
-      const [revisions] = await db.promise().query(
-        "SELECT id FROM quotation_revision WHERE quotation_id IN (?)",
-        [quotationIds]
-      );
+      const [revisions] = await db
+        .promise()
+        .query("SELECT id FROM quotation_revision WHERE quotation_id IN (?)", [
+          quotationIds,
+        ]);
       const revisionIds = revisions.map((r) => r.id);
 
       if (revisionIds.length > 0) {
-        await db.promise().query(
-          "DELETE FROM quotation_revision_files WHERE quotation_revision_id IN (?)",
-          [revisionIds]
-        );
-        await db.promise().query(
-          "DELETE FROM quotation_revision WHERE quotation_id IN (?)",
-          [quotationIds]
-        );
+        await db
+          .promise()
+          .query(
+            "DELETE FROM quotation_revision_files WHERE quotation_revision_id IN (?)",
+            [revisionIds],
+          );
+        await db
+          .promise()
+          .query("DELETE FROM quotation_revision WHERE quotation_id IN (?)", [
+            quotationIds,
+          ]);
       }
 
       // 2e. Fetch and delete quotation files
-      const [quotationFiles] = await db.promise().query(
-        "SELECT public_id FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
-        [quotationIds]
-      );
+      const [quotationFiles] = await db
+        .promise()
+        .query(
+          "SELECT public_id FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
+          [quotationIds],
+        );
       for (const file of quotationFiles) {
         if (file.public_id) {
           try {
-            const ext = file.file_name ? file.file_name.split(".").pop().toLowerCase() : "";
+            const ext = file.file_name
+              ? file.file_name.split(".").pop().toLowerCase()
+              : "";
             const isRaw = !["jpg", "jpeg", "png", "pdf"].includes(ext);
             await cloudinary.uploader.destroy(file.public_id, {
-              resource_type: isRaw ? "raw" : "image"
+              resource_type: isRaw ? "raw" : "image",
             });
           } catch (e) {
             console.log("Cloudinary destroy error:", e.message);
@@ -649,55 +731,71 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
         }
       }
 
-      await db.promise().query(
-        "DELETE FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
-        [quotationIds]
-      );
+      await db
+        .promise()
+        .query(
+          "DELETE FROM quotation_followup_files WHERE quot_follow_up_id IN (?)",
+          [quotationIds],
+        );
 
       // 2f. Delete quotation splits
-      await db.promise().query(
-        "DELETE FROM quotation_splits WHERE quotation_id IN (?)",
-        [quotationIds]
-      );
+      await db
+        .promise()
+        .query("DELETE FROM quotation_splits WHERE quotation_id IN (?)", [
+          quotationIds,
+        ]);
 
       // 2g. Delete quotation traffic light logs
-      await db.promise().query(
-        "DELETE FROM quotation_traffic_light_log WHERE quotation_id IN (?)",
-        [quotationIds]
-      );
+      await db
+        .promise()
+        .query(
+          "DELETE FROM quotation_traffic_light_log WHERE quotation_id IN (?)",
+          [quotationIds],
+        );
 
       // 2h. Delete quotations
-      await db.promise().query(
-        "DELETE FROM quotation WHERE lead_id = ?",
-        [leadId]
-      );
+      await db
+        .promise()
+        .query("DELETE FROM quotation WHERE lead_id = ?", [leadId]);
     }
 
     // 3. Delete lead follow ups and their files
-    const [followUps] = await db.promise().query(
-      "SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?",
-      [leadId]
-    );
+    const [followUps] = await db
+      .promise()
+      .query("SELECT follow_up_id FROM lead_follow_up WHERE lead_id = ?", [
+        leadId,
+      ]);
     const followUpIds = followUps.map((f) => f.follow_up_id);
 
     if (followUpIds.length > 0) {
-      await db.promise().query(
-        "DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)",
-        [followUpIds]
-      );
+      await db
+        .promise()
+        .query("DELETE FROM lead_follow_up_files WHERE follow_up_id IN (?)", [
+          followUpIds,
+        ]);
     }
 
-    await db.promise().query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
+    await db
+      .promise()
+      .query("DELETE FROM lead_follow_up WHERE lead_id = ?", [leadId]);
 
     // 4. Delete lead follow-up status logs
-    await db.promise().query("DELETE FROM lead_followup_status_log WHERE lead_id = ?", [leadId]);
+    await db
+      .promise()
+      .query("DELETE FROM lead_followup_status_log WHERE lead_id = ?", [
+        leadId,
+      ]);
 
     // 5. Delete the lead itself
     await db.promise().query("DELETE FROM `lead` WHERE lead_id = ?", [leadId]);
 
     await db.promise().query("COMMIT");
 
-    res.json({ success: true, message: "Lead and all its associated quotations, PIs, projects, revisions, follow-ups, and logs deleted successfully" });
+    res.json({
+      success: true,
+      message:
+        "Lead and all its associated quotations, PIs, projects, revisions, follow-ups, and logs deleted successfully",
+    });
   } catch (err) {
     await db.promise().query("ROLLBACK");
     console.log(err);
@@ -776,17 +874,40 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
 
   let values = [];
 
-  if (loggedInRole !== "Admin" && loggedInRole !== "Super Admin" && loggedInRole !== "Leads Management") {
-    sql += " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
+  if (
+    loggedInRole !== "Admin" &&
+    loggedInRole !== "Super Admin" &&
+    loggedInRole !== "Leads Management"
+  ) {
+    sql +=
+      " AND (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)";
     values.push(loggedInUser, loggedInUser);
   }
 
-  if (company_name) { sql += " AND l.company_name LIKE ?"; values.push(`%${company_name}%`); }
-  if (customer_name) { sql += " AND l.customer_name LIKE ?"; values.push(`%${customer_name}%`); }
-  if (reference) { sql += " AND l.reference LIKE ?"; values.push(`%${reference}%`); }
-  if (source) { sql += " AND l.source = ?"; values.push(source); }
-  if (mobile_no) { sql += " AND FIND_IN_SET(?, l.mobile_no)"; values.push(mobile_no); }
-  if (status) { sql += " AND l.status = ?"; values.push(status); }
+  if (company_name) {
+    sql += " AND l.company_name LIKE ?";
+    values.push(`%${company_name}%`);
+  }
+  if (customer_name) {
+    sql += " AND l.customer_name LIKE ?";
+    values.push(`%${customer_name}%`);
+  }
+  if (reference) {
+    sql += " AND l.reference LIKE ?";
+    values.push(`%${reference}%`);
+  }
+  if (source) {
+    sql += " AND l.source = ?";
+    values.push(source);
+  }
+  if (mobile_no) {
+    sql += " AND FIND_IN_SET(?, l.mobile_no)";
+    values.push(mobile_no);
+  }
+  if (status) {
+    sql += " AND l.status = ?";
+    values.push(status);
+  }
 
   if (from_created && to_created) {
     sql += " AND DATE(l.created_at) BETWEEN ? AND ?";
@@ -830,8 +951,6 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   });
 });
 
-
-
 /* =====================================
    GET CUSTOMER LIST FOR FILTER
 ===================================== */
@@ -852,12 +971,14 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
   });
 });
 
-
 /* =====================================
    GET TRAFFIC LIGHT ANALYTICS DATA
 ===================================== */
-router.get("/analytics/traffic-light", authenticateAndAuthorize(), (req, res) => {
-  const sql = `
+router.get(
+  "/analytics/traffic-light",
+  authenticateAndAuthorize(),
+  (req, res) => {
+    const sql = `
     SELECT 
       assignee,
       SUM(CASE WHEN status_color = 'green' THEN 1 ELSE 0 END) AS green_count,
@@ -868,13 +989,14 @@ router.get("/analytics/traffic-light", authenticateAndAuthorize(), (req, res) =>
     FROM lead_followup_status_log
     GROUP BY assignee
   `;
-  db.query(sql, (err, result) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ success: false, error: err });
-    }
-    res.json({ success: true, result });
-  });
-});
+    db.query(sql, (err, result) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, error: err });
+      }
+      res.json({ success: true, result });
+    });
+  },
+);
 
 module.exports = router;
