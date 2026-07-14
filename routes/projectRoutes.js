@@ -57,7 +57,18 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       FROM project
     `);
 
-    // 2. Expenses by category
+    // 2. Quick Summary Data
+    const [quickSummary] = await db.promise().query(`
+      SELECT 
+        MAX(amount) as highest_project_value,
+        MAX(architecture_net_amount) as highest_architect_cost,
+        COALESCE(SUM(expense_net_amount), 0) as total_operation_cost,
+        AVG(amount) as average_project_value,
+        COALESCE(SUM(net_revenue_amount), 0) as balance_amount
+      FROM project
+    `);
+
+    // 3. Expenses by category
     const [expenseByCategory] = await db.promise().query(`
       SELECT 
         expense_category,
@@ -67,7 +78,7 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       ORDER BY total_amount DESC
     `);
 
-    // 3. Architecture by architect
+    // 4. Architecture by architect
     const [architectureByArchitect] = await db.promise().query(`
       SELECT 
         architecture_name,
@@ -77,7 +88,7 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       ORDER BY total_amount DESC
     `);
 
-    // 4. Expenses over time (Weekly, Monthly, Yearly)
+    // 5. Expenses over time (Weekly, Monthly, Yearly)
     const [weeklyExpenses] = await db.promise().query(`
       SELECT 
         YEARWEEK(created_at, 1) as week_key,
@@ -109,22 +120,50 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       ORDER BY year_key DESC
     `);
 
-    // 5. Revenues/Net over time (Monthly)
+    // 6. Revenues/Net over time (Monthly, Quarterly, Yearly)
     const [monthlyFinancials] = await db.promise().query(`
       SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') as month_key,
-        DATE_FORMAT(MIN(created_at), '%b %Y') as month_name,
+        DATE_FORMAT(created_at, '%Y-%m') as time_key,
+        DATE_FORMAT(MIN(created_at), '%b %Y') as time_label,
         COALESCE(SUM(amount), 0) as revenue,
         COALESCE(SUM(architecture_net_amount), 0) as architecture,
         COALESCE(SUM(expense_net_amount), 0) as expenses,
         COALESCE(SUM(net_revenue_amount), 0) as net_revenue
       FROM project
-      GROUP BY month_key
-      ORDER BY month_key ASC
+      GROUP BY time_key
+      ORDER BY time_key ASC
       LIMIT 12
     `);
 
-    // 6. Top projects by net revenue
+    const [quarterlyFinancials] = await db.promise().query(`
+      SELECT 
+        CONCAT(YEAR(created_at), '-Q', QUARTER(created_at)) as time_key,
+        CONCAT('Q', QUARTER(created_at), ' ', YEAR(created_at)) as time_label,
+        COALESCE(SUM(amount), 0) as revenue,
+        COALESCE(SUM(architecture_net_amount), 0) as architecture,
+        COALESCE(SUM(expense_net_amount), 0) as expenses,
+        COALESCE(SUM(net_revenue_amount), 0) as net_revenue
+      FROM project
+      GROUP BY time_key
+      ORDER BY time_key ASC
+      LIMIT 12
+    `);
+
+    const [yearlyFinancials] = await db.promise().query(`
+      SELECT 
+        YEAR(created_at) as time_key,
+        CAST(YEAR(created_at) AS CHAR) as time_label,
+        COALESCE(SUM(amount), 0) as revenue,
+        COALESCE(SUM(architecture_net_amount), 0) as architecture,
+        COALESCE(SUM(expense_net_amount), 0) as expenses,
+        COALESCE(SUM(net_revenue_amount), 0) as net_revenue
+      FROM project
+      GROUP BY time_key
+      ORDER BY time_key ASC
+      LIMIT 5
+    `);
+
+    // 7. Top projects by net revenue (Balance Amount)
     const [topProjects] = await db.promise().query(`
       SELECT 
         id,
@@ -138,10 +177,23 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
       LIMIT 5
     `);
 
+    // 8. Recent projects
+    const [recentProjects] = await db.promise().query(`
+      SELECT 
+        id,
+        quotation_no,
+        customer_name,
+        amount
+      FROM project
+      ORDER BY id DESC
+      LIMIT 5
+    `);
+
     res.status(200).json({
       success: true,
       data: {
         stats: projectStats[0],
+        quickSummary: quickSummary[0],
         expenseByCategory,
         architectureByArchitect,
         expensesOverTime: {
@@ -149,8 +201,13 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
           monthly: monthlyExpenses.reverse(),
           yearly: yearlyExpenses.reverse()
         },
-        monthlyFinancials,
-        topProjects
+        financialsOverTime: {
+          monthly: monthlyFinancials,
+          quarterly: quarterlyFinancials,
+          yearly: yearlyFinancials
+        },
+        topProjects,
+        recentProjects
       }
     });
   } catch (error) {
