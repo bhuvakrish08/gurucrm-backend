@@ -2204,7 +2204,6 @@ router.get(
           q.quotation_no,
           q.quotation_date,
           q.grand_total,
-        
           q.assignee,
           q.rate,
           q.discount,
@@ -2217,16 +2216,13 @@ router.get(
           q.updated_by,
           q.updated_at,
           q.created_at,
-
           l.status as lead_status,
           l.assignee as lead_assignee,
-
           (
             SELECT COUNT(*)
             FROM quotation q2
             WHERE q2.lead_id = q.lead_id
           ) as total_quotations,
-
           qs.amount_9,
           qs.amount_18,
           qs.tax_percent_9,
@@ -2234,7 +2230,6 @@ router.get(
           qs.tax_9,
           qs.tax_18,
           qs.grand_total as split_grand_total
-
         FROM quotation q
         LEFT JOIN lead l ON l.lead_id = q.lead_id
         LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
@@ -2254,6 +2249,9 @@ router.get(
     } catch (err) {
       console.log(err);
       res.status(500).json({ success: false, message: err.message });
+
+
+      
     }
   },
 );
