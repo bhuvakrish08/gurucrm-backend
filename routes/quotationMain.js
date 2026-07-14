@@ -286,6 +286,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.tax,
           q.activity_type,
           q.description,
+          q.lost_reason,
           q.proforma_percentage,
           q.assignee,
           q.assignee_log,
@@ -345,6 +346,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.tax,
           q.activity_type,
           q.description,
+          q.lost_reason,
           q.proforma_percentage,
           q.assignee,
           q.assignee_log,
@@ -987,6 +989,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         q.tax,
         q.activity_type,
         q.description,
+        q.lost_reason,
         q.assignee,
         q.follow_up_date,
         q.updated_by,
@@ -1649,21 +1652,14 @@ router.put(
 
 // =============================
 // UPDATE STATUS
-// ✅ BUG FIX: PI insert માં VALUES array ને columns સાથે correct match કર્યો
-//    - CURRENT_DATE, 0.00, 'draft' hardcoded છે → 3 ? ઓછા
-//    - grandTotal હવે સાચા 'total' slot પર insert થાય છે
-//    - reference હવે સાચા 'reference' slot પર insert થાય છે
-// =============================
-
-// =============================
-// UPDATE STATUS
-// ✅ FIXED: Approved block માં project insert add કર્યો
-// ✅ FIXED: Won block પણ project insert સાથે કામ કરે છે
+// ✅ Includes Lost Reason handling — reason is REQUIRED when marking a
+//    quotation as "Lost". Frontend must send { quotation_status: "Lost",
+//    lost_reason: "<text>" } in the request body.
 // =============================
 
 router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
-    const { quotation_status } = req.body;
+    const { quotation_status, lost_reason } = req.body;
     const updatedBy =
       req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
@@ -1933,7 +1929,40 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       }
 
       // ============================================================
-      // OTHER STATUS (Pending, Sent, Lost, Won direct)
+      // ✅ LOST BLOCK — reason required
+      // ============================================================
+    } else if (quotation_status === "Lost") {
+      if (!lost_reason || !String(lost_reason).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Lost reason is required",
+        });
+      }
+
+      await db.promise().query(
+        "UPDATE quotation SET quotation_status = ?, lost_reason = ? WHERE id = ?",
+        [quotation_status, String(lost_reason).trim(), req.params.id],
+      );
+
+      try {
+        const [qInfo] = await db.promise().query(
+          "SELECT lead_id, assignee FROM quotation WHERE id = ?",
+          [req.params.id],
+        );
+        if (qInfo.length > 0) {
+          await logQuotationTrafficLight(
+            qInfo[0].lead_id,
+            parseInt(req.params.id),
+            "Sales",
+            qInfo[0].assignee || updatedBy,
+          );
+        }
+      } catch (e) {
+        console.error("Traffic light log error (lost status):", e);
+      }
+
+      // ============================================================
+      // OTHER STATUS (Pending, Sent, Won direct)
       // ============================================================
     } else {
       await db.promise().query(
@@ -2177,6 +2206,7 @@ router.get(
           q.tax,
           q.amount,
           q.description,
+          q.lost_reason,
           q.activity_type,
           q.proforma_percentage,
           q.updated_by,

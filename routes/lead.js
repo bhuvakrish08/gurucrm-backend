@@ -31,6 +31,7 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     COALESCE(ls.name, l.source) AS source,
     l.assignee,
     l.status,
+    l.lost_reason,
     l.created_at,
     l.updated_by,
     l.updated_at,
@@ -113,6 +114,7 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.priority,
       l.assignee,
       l.status,
+      l.lost_reason,
       lc.name AS category,
       l.description,
       l.created_at,
@@ -166,6 +168,7 @@ router.get("/sales/leads/view-details/:id", authenticateAndAuthorize(), (req, re
       lc.name AS category,
       l.description,
       l.status,
+      l.lost_reason,
       l.created_at,
       l.updated_by,
       l.updated_at
@@ -207,6 +210,7 @@ router.get("/sales/leads/view-leads/:id", authenticateAndAuthorize(), (req, res)
       l.category,
       l.description,
       l.status,
+      l.lost_reason,
       l.created_at
     FROM lead l
     WHERE l.lead_id = ?
@@ -392,11 +396,21 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
 
 /* =====================================
    UPDATE STATUS ONLY
+   ✅ UPDATED: Lost status now requires a lost_reason
+   which gets saved to the `lost_reason` column.
 ===================================== */
 router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
   const id = req.params.id;
-  const { status } = req.body;
+  const { status, lost_reason } = req.body; // ✅ lost_reason added
   const loggedInRole = req.user.role;
+
+  // ✅ Lost status requires a non-empty reason
+  if (status === "Lost" && (!lost_reason || !lost_reason.trim())) {
+    return res.status(400).json({
+      success: false,
+      message: "Lost reason is required",
+    });
+  }
 
   db.query("SELECT status FROM lead WHERE lead_id = ?", [id], (err, rows) => {
     if (err) {
@@ -476,6 +490,26 @@ router.put("/update-status/:id", authenticateAndAuthorize(), (req, res) => {
           values = [
             status,
             "Khushali", // exact assignee name
+            updated_by,
+            statusColor,
+            id,
+          ];
+        } else if (status === "Lost") {
+          // ✅ NEW BRANCH — save lost_reason along with status
+          sql = `
+            UPDATE \`lead\`
+            SET
+              status = ?,
+              lost_reason = ?,
+              updated_by = ?,
+              followup_status = ?,
+              followup_status_updated_at = NOW(),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE lead_id = ?
+          `;
+          values = [
+            status,
+            lost_reason.trim(),
             updated_by,
             statusColor,
             id,
@@ -701,6 +735,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       COALESCE(ls.name, l.source) AS source,
       l.mobile_no,
       l.status,
+      l.lost_reason,
       l.created_at,
       l.updated_by,
       l.updated_at,
@@ -816,13 +851,6 @@ router.get("/sales/leads/customers", authenticateAndAuthorize(), (req, res) => {
     res.json({ success: true, data: result });
   });
 });
-
-//     res.json({
-//       success: true,
-//       data: result,
-//     });
-//   });
-// });
 
 
 /* =====================================
