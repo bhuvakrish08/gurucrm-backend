@@ -588,59 +588,117 @@ router.put("/customer-data/:id", authenticateToken(), (req, res) => {
 });
 
 
-// Read Data on customer_data & customer_gst Table
+// ==========================
+// READ CUSTOMER (EDIT API)
+// ==========================
 router.get("/customer/:id", authenticateToken(), (req, res) => {
   const { id } = req.params;
-  const user_id = req.user.id;
+  const { id: user_id, role } = req.user;
 
-  // customer_data query
-  const customerQuery = `
-  SELECT 
-  c.id,
-  c.customer_type,
-  c.company_name AS company_id,
-  o.organization_name,
-  c.customer_name,
-  c.email,
-  c.mobile,
-  c.industry,
-  c.website,
-  c.remarks
-FROM customer_data c
-LEFT JOIN organizations o ON o.id = c.company_name
-WHERE c.id = ? AND c.user_id = ?
-`;
+  console.log("========== CUSTOMER FETCH ==========");
+  console.log("Customer ID :", id);
+  console.log("User ID     :", user_id);
+  console.log("Role        :", role);
 
+  let customerQuery;
+  let queryParams;
 
-  // customer_gst query
-  const gstQuery = `
-    SELECT id, gst_type, gst_number, state
-    FROM customer_gst
-    WHERE customer_id = ?
-  `;
+  // Super Admin can access every customer
+  if (role === "Super Admin") {
+    customerQuery = `
+      SELECT
+        c.id,
+        c.customer_type,
+        c.company_name AS company_id,
+        o.organization_name,
+        c.customer_name,
+        c.email,
+        c.mobile,
+        c.industry,
+        c.website,
+        c.remarks
+      FROM customer_data c
+      LEFT JOIN organizations o
+        ON o.id = c.company_name
+      WHERE c.id = ?
+    `;
 
-  db.query(customerQuery, [id, user_id], (err, customerResult) => {
+    queryParams = [id];
+  }
+
+  // Normal users can access only their own customers
+  else {
+    customerQuery = `
+      SELECT
+        c.id,
+        c.customer_type,
+        c.company_name AS company_id,
+        o.organization_name,
+        c.customer_name,
+        c.email,
+        c.mobile,
+        c.industry,
+        c.website,
+        c.remarks
+      FROM customer_data c
+      LEFT JOIN organizations o
+        ON o.id = c.company_name
+      WHERE c.id = ?
+      AND c.user_id = ?
+    `;
+
+    queryParams = [id, user_id];
+  }
+
+  db.query(customerQuery, queryParams, (err, customerResult) => {
     if (err) {
-      return res.status(500).json({ message: "Customer query failed", error: err });
+      console.error("Customer Query Error:", err);
+
+      return res.status(500).json({
+        success: false,
+        message: "Customer query failed",
+        error: err.message,
+      });
     }
+
+    console.log("Customer Result:", customerResult);
 
     if (customerResult.length === 0) {
-      return res.status(404).json({ message: "Customer not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
     }
 
-    db.query(gstQuery, [id], (err, gstResult) => {
-      if (err) {
-        return res.status(500).json({ message: "GST query failed", error: err });
+    const gstQuery = `
+      SELECT
+        id,
+        gst_type,
+        gst_number,
+        state
+      FROM customer_gst
+      WHERE customer_id = ?
+    `;
+
+    db.query(gstQuery, [id], (gstErr, gstResult) => {
+      if (gstErr) {
+        console.error("GST Query Error:", gstErr);
+
+        return res.status(500).json({
+          success: false,
+          message: "GST query failed",
+          error: gstErr.message,
+        });
       }
 
       return res.status(200).json({
+        success: true,
         customer: customerResult[0],
-        gst_details: gstResult
+        gst_details: gstResult,
       });
     });
   });
 });
-
 
 // If Exist so update Data on customer_gst Table Otherwise add new Data
 
