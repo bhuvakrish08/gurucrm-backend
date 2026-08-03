@@ -46,6 +46,8 @@ const generalExpenseMasterRoutes = require("./routes/generalExpenseMaster");
 const netProfitRoutes = require("./routes/netProfit");
 
 const upcomingFollowUpRoutes = require("./routes/upcomingFollowUp");
+const strategyRoutes = require("./routes/strategyRoutes");
+const strategyMigration = require("./utils/strategyMigration");
 
 
 
@@ -99,7 +101,13 @@ app.use("/api/followup", upcomingFollowUpRoutes);
 
 app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
+app.use("/api/strategy", strategyRoutes);
+
+// Run migrations on startup
+strategyMigration.runMigration().catch(err => {
+  console.error("Failed to run Strategy Module migrations on startup:", err);
+});
 
 app.listen(process.env.PORT, () => {
-  console.log("Server running");
+  console.log("Server running on port", process.env.PORT);
 });
