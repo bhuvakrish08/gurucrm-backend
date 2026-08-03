@@ -919,6 +919,18 @@ router.post(
         console.log("Activity Log Error:", activityErr.message);
       }
 
+      // =============================
+      // SALES STRATEGY CONTRIBUTION SYNC HOOK (ON CREATE)
+      // =============================
+      try {
+        const scs = require("../services/StrategyCalculationService");
+        if (scs.isStrategyClosedStatus(quotation_status)) {
+          await scs.syncWonQuotationContribution(quotationId);
+        }
+      } catch (strategyErr) {
+        console.error(`[Strategy Sync Warning] Quotation ${quotationId} created but Strategy sync failed:`, strategyErr.message);
+      }
+
       return res.status(201).json({
         success: true,
         message: "Quotation created successfully",
@@ -1377,6 +1389,23 @@ router.put(
          VALUES ?`,
           [fileValues],
         );
+      }
+
+      // =============================
+      // SALES STRATEGY CONTRIBUTION SYNC HOOK (ON EDIT)
+      // =============================
+      try {
+        const scs = require("../services/StrategyCalculationService");
+        const [qStatusCheck] = await db.promise().query("SELECT quotation_status FROM quotation WHERE id = ?", [req.params.id]);
+        if (qStatusCheck.length > 0) {
+          if (scs.isStrategyClosedStatus(qStatusCheck[0].quotation_status)) {
+            await scs.syncWonQuotationContribution(req.params.id);
+          } else {
+            await scs.removeQuotationContribution(req.params.id);
+          }
+        }
+      } catch (strategyErr) {
+        console.error(`[Strategy Sync Warning] Quotation ${req.params.id} updated but Strategy sync failed:`, strategyErr.message);
       }
 
       res.json({
@@ -2047,6 +2076,20 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
       }
     }
 
+    // =============================
+    // SALES STRATEGY CONTRIBUTION SYNC HOOK (ON STATUS UPDATE)
+    // =============================
+    try {
+      const scs = require("../services/StrategyCalculationService");
+      if (scs.isStrategyClosedStatus(quotation_status)) {
+        await scs.syncWonQuotationContribution(req.params.id);
+      } else {
+        await scs.removeQuotationContribution(req.params.id);
+      }
+    } catch (strategyErr) {
+      console.error(`[Strategy Sync Warning] Quotation ${req.params.id} status updated to ${quotation_status} but Strategy sync failed:`, strategyErr.message);
+    }
+
     res.json({ success: true, message: "Status updated successfully" });
   } catch (err) {
     console.error("UPDATE STATUS ERROR:", err);
@@ -2134,6 +2177,13 @@ router.delete("/:id", async (req, res) => {
         [req.params.id],
       );
 
+    try {
+      const scs = require("../services/StrategyCalculationService");
+      await scs.removeQuotationContribution(req.params.id);
+    } catch (strategyErr) {
+      console.error(`[Strategy Sync Warning] Failed to remove strategy contribution on quotation delete:`, strategyErr.message);
+    }
+
     await db
       .promise()
       .query("DELETE FROM quotation WHERE id = ?", [req.params.id]);
@@ -2167,6 +2217,17 @@ router.put("/update-main-status/:id", async (req, res) => {
       .query("UPDATE quotation SET quotation_status = 'Won' WHERE id = ?", [
         req.params.id,
       ]);
+
+    // =============================
+    // SALES STRATEGY CONTRIBUTION SYNC HOOK (ON MAIN STATUS UPDATE)
+    // =============================
+    try {
+      const scs = require("../services/StrategyCalculationService");
+      await scs.syncWonQuotationContribution(req.params.id);
+    } catch (strategyErr) {
+      console.error(`[Strategy Sync Warning] Quotation ${req.params.id} main status updated to Won but Strategy sync failed:`, strategyErr.message);
+    }
+
     res.json({
       success: true,
       message: "Main quotation status updated successfully",
