@@ -754,6 +754,15 @@ router.delete("/:id", authenticateAndAuthorize(), async (req, res) => {
         );
 
       // 2h. Delete quotations
+      try {
+        const scs = require("../services/StrategyCalculationService");
+        for (const qId of quotationIds) {
+          await scs.removeQuotationContribution(qId);
+        }
+      } catch (strategyErr) {
+        console.error(`[Strategy Sync Warning] Failed to remove strategy contributions on lead delete:`, strategyErr.message);
+      }
+
       await db
         .promise()
         .query("DELETE FROM quotation WHERE lead_id = ?", [leadId]);
