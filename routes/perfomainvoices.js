@@ -113,12 +113,12 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
 });
 
 // ============================================================
-// ADD FOLLOW-UP TO PI (WITH SPLIT total_9 / total_18)
-// Base for percentage calculation = amount + tax (tax-inclusive)
+// ADD FOLLOW-UP TO PI (AMOUNT-WISE & SINGLE PI FOLLOW-UP)
 // ============================================================
 router.post("/add-followup/:pi_id", async (req, res) => {
   const { pi_id } = req.params;
   const {
+    amount,
     percentage,
     percentage_9,
     percentage_18,
@@ -136,7 +136,6 @@ router.post("/add-followup/:pi_id", async (req, res) => {
 
     const pi = piData[0];
 
-    // Get quotation split amounts + tax (tax-inclusive base)
     const [quoteData] = await db.promise().query(
       `SELECT q.grand_total, 
               COALESCE(qs.amount_9, pi_tbl.amount_9, 0) AS amount_9,
@@ -152,49 +151,44 @@ router.post("/add-followup/:pi_id", async (req, res) => {
 
     const grand_total = Number(quoteData[0]?.grand_total || 0);
 
-    // Tax-inclusive base: amount + tax for each part
-    const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
-    const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
-
-    // Current totals already used for Part A and Part B
-    const [current9] = await db.promise().query(
-      `SELECT COALESCE(SUM(proforma_percentage_9), 0) AS used_9
-       FROM pi_follow_up WHERE pi_id = ?`,
-      [pi_id],
-    );
-    const [current18] = await db.promise().query(
-      `SELECT COALESCE(SUM(proforma_percentage_18), 0) AS used_18
+    // Current total used across all follow-ups
+    const [currentTotals] = await db.promise().query(
+      `SELECT 
+         COALESCE(SUM(COALESCE(total_18, 0) + COALESCE(total_9, 0)), 0) AS used_amt,
+         COALESCE(SUM(COALESCE(proforma_percentage_18, 0) + COALESCE(proforma_percentage_9, 0)), 0) AS used_pct
        FROM pi_follow_up WHERE pi_id = ?`,
       [pi_id],
     );
 
-    const used_9  = Number(current9[0].used_9);
-    const used_18 = Number(current18[0].used_18);
-    const new_pct_9  = Number(percentage_9  || 0);
-    const new_pct_18 = Number(percentage_18 || 0);
+    const used_amt = Number(currentTotals[0].used_amt || 0);
+    const used_pct = Number(currentTotals[0].used_pct || 0);
 
-    if (used_9 + new_pct_9 > 100) {
+    let new_amt = 0;
+    let new_pct_18 = 0;
+    let new_pct_9 = 0;
+
+    if (amount !== undefined && amount !== null && amount !== "") {
+      new_amt = Number(amount || 0);
+      new_pct_18 = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+    } else {
+      new_pct_9  = Number(percentage_9  || 0);
+      new_pct_18 = Number(percentage_18 || 0);
+      const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
+      const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
+      new_amt = ((base_amt_9 * new_pct_9) / 100) + ((base_amt_18 * new_pct_18) / 100);
+    }
+
+    if (grand_total > 0 && (used_amt + new_amt > grand_total + 0.5)) {
+      const remaining_amt = Math.max(0, grand_total - used_amt);
       return res.status(400).json({
-        message: `Part A: Only ${(100 - used_9).toFixed(2)}% remaining`,
+        message: `Amount exceeds remaining PI balance. Only Rs. ${remaining_amt.toFixed(2)} remaining`,
       });
     }
-    if (used_18 + new_pct_18 > 100) {
-      return res.status(400).json({
-        message: `Part B: Only ${(100 - used_18).toFixed(2)}% remaining`,
-      });
-    }
 
-    // Calculate amounts on tax-inclusive base
-    const new_total_9  = (base_amt_9  * new_pct_9)  / 100;
-    const new_total_18 = (base_amt_18 * new_pct_18) / 100;
-    const new_total    = new_total_9 + new_total_18;
+    const new_total_18 = new_amt;
+    const new_total_9 = 0;
 
-    // Overall percentage relative to grand total
-    const overall_pct = grand_total > 0
-      ? ((new_total / grand_total) * 100)
-      : Number(percentage || 0);
-
-    // Insert follow-up (no proforma_percentage / total columns in pi_follow_up)
+    // Insert follow-up
     await db.promise().query(
       `INSERT INTO pi_follow_up 
        (pi_id, proforma_percentage_9, proforma_percentage_18, total_9, total_18)
@@ -205,10 +199,10 @@ router.post("/add-followup/:pi_id", async (req, res) => {
     // Recalculate totals from all follow-ups
     const [totals] = await db.promise().query(
       `SELECT 
-         SUM(proforma_percentage_9)  AS total_pct_9,
-         SUM(proforma_percentage_18) AS total_pct_18,
-         SUM(total_9)                AS total_amt_9,
-         SUM(total_18)               AS total_amt_18
+         SUM(COALESCE(proforma_percentage_9, 0))  AS total_pct_9,
+         SUM(COALESCE(proforma_percentage_18, 0)) AS total_pct_18,
+         SUM(COALESCE(total_9, 0))                AS total_amt_9,
+         SUM(COALESCE(total_18, 0))               AS total_amt_18
        FROM pi_follow_up WHERE pi_id = ?`,
       [pi_id],
     );
@@ -218,9 +212,8 @@ router.post("/add-followup/:pi_id", async (req, res) => {
     const total_amt_9      = Number(totals[0].total_amt_9  || 0);
     const total_amt_18     = Number(totals[0].total_amt_18 || 0);
 
-    // Overall % and total for proforma_invoices (based on grand_total)
     const total_amount     = total_amt_9 + total_amt_18;
-    const total_percentage = grand_total > 0 ? (total_amount / grand_total) * 100 : 0;
+    const total_percentage = grand_total > 0 ? (total_amount / grand_total) * 100 : (total_pct_9 + total_pct_18);
 
     // Update proforma_invoices
     await db.promise().query(
@@ -417,12 +410,12 @@ router.get("/filter", async (req, res) => {
 });
 
 // ============================================================
-// UPDATE LATEST FOLLOW-UP ONLY (WITH SPLIT)
-// Base for percentage calculation = amount + tax (tax-inclusive)
+// ============================================================
+// UPDATE LATEST FOLLOW-UP ONLY (AMOUNT-WISE)
 // ============================================================
 router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
   const { pi_id, follow_id } = req.params;
-  const { percentage, percentage_9, percentage_18 } = req.body;
+  const { amount, percentage, percentage_9, percentage_18 } = req.body;
 
   try {
     const [latest] = await db.promise().query(
@@ -434,7 +427,13 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
       return res.status(400).json({ message: "Only latest follow-up can be edited" });
     }
 
-    // Get split base amounts + tax (tax-inclusive base)
+    const [piData] = await db.promise().query(
+      `SELECT quotation_id FROM proforma_invoices WHERE pi_id = ?`,
+      [pi_id],
+    );
+
+    const quotation_id = piData[0]?.quotation_id;
+
     const [quoteData] = await db.promise().query(
       `SELECT q.grand_total,
               COALESCE(qs.amount_9,  pi_tbl.amount_9,  0) AS amount_9,
@@ -444,37 +443,54 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
        FROM quotation q
        LEFT JOIN quotation_splits qs ON qs.quotation_id = q.id
        LEFT JOIN proforma_invoices pi_tbl ON pi_tbl.quotation_id = q.id AND pi_tbl.pi_id = ?
-       WHERE q.id = (SELECT quotation_id FROM proforma_invoices WHERE pi_id = ?)`,
-      [pi_id, pi_id],
+       WHERE q.id = ?`,
+      [pi_id, quotation_id],
     );
 
     const grand_total = Number(quoteData[0]?.grand_total || 0);
 
-    // Tax-inclusive base: amount + tax for each part
-    const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
-    const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
+    const [otherTotals] = await db.promise().query(
+      `SELECT COALESCE(SUM(COALESCE(total_18, 0) + COALESCE(total_9, 0)), 0) AS other_used_amt
+       FROM pi_follow_up WHERE pi_id = ? AND id != ?`,
+      [pi_id, follow_id],
+    );
 
-    const new_pct_9  = Number(percentage_9  || 0);
-    const new_pct_18 = Number(percentage_18 || 0);
-    const new_total_9  = (base_amt_9  * new_pct_9)  / 100;
-    const new_total_18 = (base_amt_18 * new_pct_18) / 100;
-    const new_total    = new_total_9 + new_total_18;
-    const overall_pct  = grand_total > 0
-      ? ((new_total / grand_total) * 100)
-      : Number(percentage || 0);
+    const other_used_amt = Number(otherTotals[0].other_used_amt || 0);
+
+    let new_amt = 0;
+    let new_pct_18 = 0;
+    let new_pct_9 = 0;
+
+    if (amount !== undefined && amount !== null && amount !== "") {
+      new_amt = Number(amount || 0);
+      new_pct_18 = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+    } else {
+      new_pct_9  = Number(percentage_9  || 0);
+      new_pct_18 = Number(percentage_18 || 0);
+      const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
+      const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
+      new_amt = ((base_amt_9 * new_pct_9) / 100) + ((base_amt_18 * new_pct_18) / 100);
+    }
+
+    if (grand_total > 0 && (other_used_amt + new_amt > grand_total + 0.5)) {
+      const remaining_amt = Math.max(0, grand_total - other_used_amt);
+      return res.status(400).json({
+        message: `Amount exceeds remaining PI balance. Only Rs. ${remaining_amt.toFixed(2)} remaining`,
+      });
+    }
 
     await db.promise().query(
       `UPDATE pi_follow_up 
        SET proforma_percentage_9 = ?, proforma_percentage_18 = ?,
-           total_9 = ?, total_18 = ?
+           total_9 = 0, total_18 = ?
        WHERE id = ?`,
-      [new_pct_9, new_pct_18, new_total_9, new_total_18, follow_id],
+      [new_pct_9, new_pct_18, new_amt, follow_id],
     );
 
     const [totals] = await db.promise().query(
       `SELECT 
-         SUM(total_9)  AS total_amt_9,
-         SUM(total_18) AS total_amt_18
+         SUM(COALESCE(total_9, 0))  AS total_amt_9,
+         SUM(COALESCE(total_18, 0)) AS total_amt_18
        FROM pi_follow_up WHERE pi_id = ?`,
       [pi_id],
     );
@@ -498,9 +514,8 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
     );
 
     await db.promise().query(
-      `UPDATE quotation SET proforma_percentage = ?
-       WHERE id = (SELECT quotation_id FROM proforma_invoices WHERE pi_id = ?)`,
-      [total_pct, pi_id],
+      `UPDATE quotation SET proforma_percentage = ? WHERE id = ?`,
+      [total_pct, quotation_id],
     );
 
     res.json({ success: true, message: "Follow-up updated" });
@@ -590,12 +605,49 @@ router.put("/update-stage/:pi_id", async (req, res) => {
 });
 
 
-// REPLACE the entire quotation-file route with this:
+// Fetch ALL quotation files for popup modal
+router.get("/quotation-files/:quotation_id", async (req, res) => {
+  try {
+    const { quotation_id } = req.params;
+
+    const [quotation] = await db.promise().query(
+      `SELECT id, quotation_no, quotation_status FROM quotation WHERE id = ?`,
+      [quotation_id]
+    );
+
+    if (!quotation.length) {
+      return res.json({ success: false, message: "Quotation not found" });
+    }
+
+    const [files] = await db.promise().query(
+      `SELECT id, file_name, file_path, created_at
+       FROM quotation_followup_files 
+       WHERE quot_follow_up_id = ? 
+       ORDER BY id DESC`,
+      [quotation_id]
+    );
+
+    if (!files.length) {
+      return res.json({
+        success: false,
+        message: "No attachments found for this quotation",
+        quotation: quotation[0],
+        files: [],
+      });
+    }
+
+    return res.json({ success: true, quotation: quotation[0], files });
+
+  } catch (err) {
+    console.error("quotation-files error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.get("/quotation-file/:quotation_id", async (req, res) => {
   try {
     const { quotation_id } = req.params;
 
-    // Check quotation exists and is Approved
     const [quotation] = await db.promise().query(
       `SELECT id, quotation_status FROM quotation WHERE id = ?`,
       [quotation_id]
@@ -605,20 +657,11 @@ router.get("/quotation-file/:quotation_id", async (req, res) => {
       return res.json({ success: false, message: "Quotation not found" });
     }
 
-    if (quotation[0].quotation_status !== "Approved") {
-      return res.json({
-        success: false,
-        message: `Quotation is not approved (status: ${quotation[0].quotation_status})`,
-      });
-    }
-
-    // quot_follow_up_id in quotation_followup_files stores the quotation_id directly
     const [files] = await db.promise().query(
-      `SELECT file_path 
+      `SELECT id, file_name, file_path, created_at
        FROM quotation_followup_files 
        WHERE quot_follow_up_id = ? 
-       ORDER BY id DESC 
-       LIMIT 1`,
+       ORDER BY id DESC`,
       [quotation_id]
     );
 
@@ -626,7 +669,7 @@ router.get("/quotation-file/:quotation_id", async (req, res) => {
       return res.json({ success: false, message: "No attachment found for this quotation" });
     }
 
-    return res.json({ success: true, file: files[0].file_path });
+    return res.json({ success: true, file: files[0].file_path, files });
 
   } catch (err) {
     console.error("quotation-file error:", err);
