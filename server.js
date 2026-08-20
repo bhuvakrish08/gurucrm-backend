@@ -103,6 +103,17 @@ app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
+// Backend Health Check
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    message: "Backend is healthy",
+    service: "CRM Backend",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
+
 
 // Run migrations on startup
 strategyMigration.runMigration().catch(err => {
