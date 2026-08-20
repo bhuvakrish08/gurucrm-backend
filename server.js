@@ -103,13 +103,6 @@ app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    server: "hostinger",
-    timestamp: new Date().toISOString(),
-  });
-});
 
 // Run migrations on startup
 strategyMigration.runMigration().catch(err => {
