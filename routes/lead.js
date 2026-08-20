@@ -52,7 +52,13 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       NOW()
     ) AS hours_since_last_activity,
     CASE
-      WHEN l.status IN ('Won', 'Lost') THEN COALESCE(l.followup_status, 'green')
+      WHEN l.status = 'Won' THEN
+        CASE
+          WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${RED_HOURS} THEN 'red'
+          WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${YELLOW_HOURS} THEN 'yellow'
+          ELSE 'green'
+        END
+      WHEN l.status = 'Lost' THEN COALESCE(l.followup_status, 'green')
       WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
         COALESCE(last_fu.last_followup_at, l.created_at),
         NOW()
@@ -859,7 +865,13 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
         NOW()
       ) AS hours_since_last_activity,
       CASE
-        WHEN l.status IN ('Won', 'Lost') THEN COALESCE(l.followup_status, 'green')
+        WHEN l.status = 'Won' THEN
+          CASE
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${RED_HOURS} THEN 'red'
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${YELLOW_HOURS} THEN 'yellow'
+            ELSE 'green'
+          END
+        WHEN l.status = 'Lost' THEN COALESCE(l.followup_status, 'green')
         WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
           COALESCE(last_fu.last_followup_at, l.created_at),
           NOW()

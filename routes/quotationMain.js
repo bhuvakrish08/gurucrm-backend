@@ -9,6 +9,8 @@ const router = express.Router();
 
 const YELLOW_HOURS = parseFloat(process.env.YELLOW_HOURS || "24");
 const RED_HOURS = parseFloat(process.env.RED_HOURS || "48");
+const SENT_YELLOW_HOURS = 72; // 3 days
+const SENT_RED_HOURS = 120; // 5 days
 // =============================
 // ASSIGNEE ROLE VALIDATION HELPER
 // =============================
@@ -157,8 +159,11 @@ async function logQuotationTrafficLight(lead_id, quotation_id, role_type, assign
       }
     }
 
-    if (hours >= RED_HOURS) color = 'red';
-    else if (hours >= YELLOW_HOURS) color = 'yellow';
+    const redThreshold = (role_type === 'Sales') ? SENT_RED_HOURS : RED_HOURS;
+    const yellowThreshold = (role_type === 'Sales') ? SENT_YELLOW_HOURS : YELLOW_HOURS;
+
+    if (hours >= redThreshold) color = 'red';
+    else if (hours >= yellowThreshold) color = 'yellow';
 
     await db.promise().query(
       'INSERT INTO quotation_traffic_light_log (lead_id, quotation_id, role_type, assignee, status_color, hours_elapsed) VALUES (?, ?, ?, ?, ?, ?)',
@@ -456,8 +461,8 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
 
         if (startTime) {
           const elapsed = (now - new Date(startTime)) / (1000 * 3600);
-          if (elapsed >= RED_HOURS) activeColor = 'red';
-          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          if (elapsed >= SENT_RED_HOURS) activeColor = 'red';
+          else if (elapsed >= SENT_YELLOW_HOURS) activeColor = 'yellow';
           else activeColor = 'green';
         } else {
           activeColor = 'green';
@@ -1148,8 +1153,8 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
 
         if (startTime) {
           const elapsed = (now - new Date(startTime)) / (1000 * 3600);
-          if (elapsed >= RED_HOURS) activeColor = 'red';
-          else if (elapsed >= YELLOW_HOURS) activeColor = 'yellow';
+          if (elapsed >= SENT_RED_HOURS) activeColor = 'red';
+          else if (elapsed >= SENT_YELLOW_HOURS) activeColor = 'yellow';
           else activeColor = 'green';
         } else {
           activeColor = 'green';

@@ -216,21 +216,69 @@ router.get("/analytics/dashboard", authenticateAndAuthorize(), async (req, res) 
   }
 });
 
+function getBaseQuotationNo(quotationNo) {
+  if (!quotationNo) return "";
+  return String(quotationNo).split("/")[0].trim();
+}
+
 // Get currently assigned architectures for a project
 router.get("/:id/architectures", authenticateAndAuthorize(), async (req, res) => {
   const projectId = req.params.id;
   try {
-    const [rows] = await db.promise().query(
-      `SELECT id, project_id, architecture_name, mobile_no, address, email, architecture_amount, percentage, created_at 
-       FROM project_architecture 
-       WHERE project_id = ?`,
+    const [targetRows] = await db.promise().query(
+      "SELECT quotation_no, amount FROM project WHERE id = ?",
       [projectId]
     );
+    const quotationNo = targetRows.length > 0 ? targetRows[0].quotation_no : null;
+    const baseQuotationNo = getBaseQuotationNo(quotationNo);
 
-    res.status(200).json({
-      success: true,
-      data: rows,
-    });
+    let groupProjects = [];
+    if (baseQuotationNo) {
+      const [groupRows] = await db.promise().query(
+        "SELECT id, amount FROM project WHERE TRIM(SUBSTRING_INDEX(quotation_no, '/', 1)) = ?",
+        [baseQuotationNo]
+      );
+      groupProjects = groupRows;
+    }
+    if (groupProjects.length === 0 && targetRows.length > 0) {
+      groupProjects = [{ id: projectId, amount: targetRows[0].amount }];
+    }
+
+    const totalGroupAmount = groupProjects.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const groupProjectIds = groupProjects.map((r) => r.id);
+
+    if (groupProjectIds.length > 1) {
+      const [rows] = await db.promise().query(
+        `SELECT 
+           architecture_name, 
+           MAX(mobile_no) as mobile_no, 
+           MAX(address) as address, 
+           MAX(email) as email, 
+           SUM(architecture_amount) as architecture_amount, 
+           MAX(percentage) as percentage 
+         FROM project_architecture 
+         WHERE project_id IN (?)
+         GROUP BY architecture_name`,
+        [groupProjectIds]
+      );
+      res.status(200).json({
+        success: true,
+        totalGroupAmount,
+        data: rows,
+      });
+    } else {
+      const [rows] = await db.promise().query(
+        `SELECT id, project_id, architecture_name, mobile_no, address, email, architecture_amount, percentage, created_at 
+         FROM project_architecture 
+         WHERE project_id = ?`,
+        [projectId]
+      );
+      res.status(200).json({
+        success: true,
+        totalGroupAmount,
+        data: rows,
+      });
+    }
   } catch (error) {
     console.error("GET PROJECT ARCHITECTURES ERROR:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -250,60 +298,94 @@ router.post("/:id/architectures", authenticateAndAuthorize(), async (req, res) =
   try {
     await connection.beginTransaction();
 
-    // 1. Get project details to get amount and current expense_net_amount
-    const [projectRows] = await connection.query(
-      "SELECT grand_total, amount, expense_net_amount FROM project WHERE id = ?",
+    const [targetRows] = await connection.query(
+      "SELECT quotation_no FROM project WHERE id = ?",
       [projectId]
     );
-    if (projectRows.length === 0) {
+    if (targetRows.length === 0) {
       connection.release();
       return res.status(404).json({ success: false, message: "Project not found" });
     }
-    const amountVal = Number(projectRows[0].amount) || 0;
-    const expenseNetAmount = Number(projectRows[0].expense_net_amount) || 0;
 
-    // 2. Delete existing architecture assignments for this project
-    await connection.query(
-      "DELETE FROM project_architecture WHERE project_id = ?",
-      [projectId]
-    );
+    const baseQuotationNo = getBaseQuotationNo(targetRows[0].quotation_no);
 
-    let totalArchitectureAmount = 0;
-
-    // 3. Insert new architectures
-    for (const arch of architectures) {
-      const percentage = Number(arch.percentage) || 0;
-      const amount = Number(arch.architecture_amount) || 0;
-      totalArchitectureAmount += amount;
-
-      // Insert into project_architecture
-      await connection.query(
-        `INSERT INTO project_architecture 
-         (project_id, architecture_name, mobile_no, address, email, architecture_amount, percentage)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          projectId,
-          arch.name || arch.architecture_name,
-          arch.mobile_no || null,
-          arch.address || null,
-          arch.email || null,
-          amount,
-          percentage
-        ]
+    let groupProjects = [];
+    if (baseQuotationNo) {
+      const [gRows] = await connection.query(
+        "SELECT id, amount, expense_net_amount FROM project WHERE TRIM(SUBSTRING_INDEX(quotation_no, '/', 1)) = ?",
+        [baseQuotationNo]
       );
+      groupProjects = gRows;
     }
 
-    // 4. Calculate net_revenue_amount = amountVal - totalArchitectureAmount - expenseNetAmount
-    const netRevenue = amountVal - totalArchitectureAmount - expenseNetAmount;
+    if (groupProjects.length === 0) {
+      const [pRows] = await connection.query(
+        "SELECT id, amount, expense_net_amount FROM project WHERE id = ?",
+        [projectId]
+      );
+      groupProjects = pRows;
+    }
 
-    // 5. Update project table (architecture_net_amount and net_revenue_amount)
+    const totalGroupAmount = groupProjects.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const groupProjectIds = groupProjects.map((p) => p.id);
+
+    // Delete existing architectures for all projects in group
     await connection.query(
-      `UPDATE project 
-       SET architecture_net_amount = ?,
-           net_revenue_amount = ?
-       WHERE id = ?`,
-      [totalArchitectureAmount, netRevenue, projectId]
+      "DELETE FROM project_architecture WHERE project_id IN (?)",
+      [groupProjectIds]
     );
+
+    let targetProjectData = { architecture_net_amount: 0, expense_net_amount: 0, net_revenue_amount: 0 };
+
+    for (let i = 0; i < groupProjects.length; i++) {
+      const proj = groupProjects[i];
+      const projAmount = Number(proj.amount) || 0;
+      const ratio = totalGroupAmount > 0 ? projAmount / totalGroupAmount : 1 / groupProjects.length;
+
+      let totalArchForProj = 0;
+
+      for (const arch of architectures) {
+        const fullArchAmount = Number(arch.architecture_amount) || 0;
+        const percentage = Number(arch.percentage) || 0;
+
+        let archAmountForP = Math.round(fullArchAmount * ratio * 100) / 100;
+        totalArchForProj += archAmountForP;
+
+        await connection.query(
+          `INSERT INTO project_architecture 
+           (project_id, architecture_name, mobile_no, address, email, architecture_amount, percentage)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            proj.id,
+            arch.name || arch.architecture_name,
+            arch.mobile_no || null,
+            arch.address || null,
+            arch.email || null,
+            archAmountForP,
+            percentage,
+          ]
+        );
+      }
+
+      const expNet = Number(proj.expense_net_amount) || 0;
+      const netRev = projAmount - totalArchForProj - expNet;
+
+      await connection.query(
+        `UPDATE project 
+         SET architecture_net_amount = ?,
+             net_revenue_amount = ?
+         WHERE id = ?`,
+        [totalArchForProj, netRev, proj.id]
+      );
+
+      if (String(proj.id) === String(projectId)) {
+        targetProjectData = {
+          architecture_net_amount: totalArchForProj,
+          expense_net_amount: expNet,
+          net_revenue_amount: netRev,
+        };
+      }
+    }
 
     await connection.commit();
     connection.release();
@@ -311,11 +393,7 @@ router.post("/:id/architectures", authenticateAndAuthorize(), async (req, res) =
     res.status(200).json({
       success: true,
       message: "Project architectures updated successfully.",
-      data: {
-        architecture_net_amount: totalArchitectureAmount,
-        expense_net_amount: expenseNetAmount,
-        net_revenue_amount: netRevenue
-      }
+      data: targetProjectData,
     });
   } catch (error) {
     await connection.rollback();
@@ -329,14 +407,56 @@ router.post("/:id/architectures", authenticateAndAuthorize(), async (req, res) =
 router.get("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
   const projectId = req.params.id;
   try {
-    const [rows] = await db.promise().query(
-      "SELECT id, project_id, expense_category, description, expense_amount, created_at, updated_at FROM project_expense WHERE project_id = ? ORDER BY id ASC",
+    const [targetRows] = await db.promise().query(
+      "SELECT quotation_no, amount FROM project WHERE id = ?",
       [projectId]
     );
-    res.status(200).json({
-      success: true,
-      data: rows,
-    });
+    const quotationNo = targetRows.length > 0 ? targetRows[0].quotation_no : null;
+    const baseQuotationNo = getBaseQuotationNo(quotationNo);
+
+    let groupProjects = [];
+    if (baseQuotationNo) {
+      const [groupRows] = await db.promise().query(
+        "SELECT id, amount FROM project WHERE TRIM(SUBSTRING_INDEX(quotation_no, '/', 1)) = ?",
+        [baseQuotationNo]
+      );
+      groupProjects = groupRows;
+    }
+    if (groupProjects.length === 0 && targetRows.length > 0) {
+      groupProjects = [{ id: projectId, amount: targetRows[0].amount }];
+    }
+
+    const totalGroupAmount = groupProjects.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const groupProjectIds = groupProjects.map((r) => r.id);
+
+    if (groupProjectIds.length > 1) {
+      const [rows] = await db.promise().query(
+        `SELECT 
+           expense_category, 
+           description, 
+           SUM(expense_amount) as expense_amount 
+         FROM project_expense 
+         WHERE project_id IN (?)
+         GROUP BY expense_category, description
+         ORDER BY MIN(id) ASC`,
+        [groupProjectIds]
+      );
+      res.status(200).json({
+        success: true,
+        totalGroupAmount,
+        data: rows,
+      });
+    } else {
+      const [rows] = await db.promise().query(
+        "SELECT id, project_id, expense_category, description, expense_amount, created_at, updated_at FROM project_expense WHERE project_id = ? ORDER BY id ASC",
+        [projectId]
+      );
+      res.status(200).json({
+        success: true,
+        totalGroupAmount,
+        data: rows,
+      });
+    }
   } catch (error) {
     console.error("GET PROJECT EXPENSES ERROR:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -356,55 +476,89 @@ router.post("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // 1. Get project details to get amount and architecture_net_amount
-    const [projectRows] = await connection.query(
-      "SELECT grand_total, amount, architecture_net_amount FROM project WHERE id = ?",
+    const [targetRows] = await connection.query(
+      "SELECT quotation_no FROM project WHERE id = ?",
       [projectId]
     );
-    if (projectRows.length === 0) {
+    if (targetRows.length === 0) {
       connection.release();
       return res.status(404).json({ success: false, message: "Project not found" });
     }
-    const amountVal = Number(projectRows[0].amount) || 0;
-    const architectureNetAmount = Number(projectRows[0].architecture_net_amount) || 0;
 
-    // 2. Delete existing expenses for this project
-    await connection.query(
-      "DELETE FROM project_expense WHERE project_id = ?",
-      [projectId]
-    );
+    const baseQuotationNo = getBaseQuotationNo(targetRows[0].quotation_no);
 
-    let totalExpenseAmount = 0;
-
-    // 3. Insert new expenses
-    for (const exp of expenses) {
-      const amount = Number(exp.expense_amount) || 0;
-      totalExpenseAmount += amount;
-
-      await connection.query(
-        `INSERT INTO project_expense 
-         (project_id, expense_category, description, expense_amount)
-         VALUES (?, ?, ?, ?)`,
-        [
-          projectId,
-          exp.expense_category,
-          exp.description || null,
-          amount
-        ]
+    let groupProjects = [];
+    if (baseQuotationNo) {
+      const [gRows] = await connection.query(
+        "SELECT id, amount, architecture_net_amount FROM project WHERE TRIM(SUBSTRING_INDEX(quotation_no, '/', 1)) = ?",
+        [baseQuotationNo]
       );
+      groupProjects = gRows;
     }
 
-    // 4. Calculate net_revenue_amount = amountVal - architectureNetAmount - totalExpenseAmount
-    const netRevenue = amountVal - architectureNetAmount - totalExpenseAmount;
+    if (groupProjects.length === 0) {
+      const [pRows] = await connection.query(
+        "SELECT id, amount, architecture_net_amount FROM project WHERE id = ?",
+        [projectId]
+      );
+      groupProjects = pRows;
+    }
 
-    // 5. Update project table (expense_net_amount and net_revenue_amount)
+    const totalGroupAmount = groupProjects.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const groupProjectIds = groupProjects.map((p) => p.id);
+
+    // Delete existing expenses for all projects in group
     await connection.query(
-      `UPDATE project 
-       SET expense_net_amount = ?,
-           net_revenue_amount = ?
-       WHERE id = ?`,
-      [totalExpenseAmount, netRevenue, projectId]
+      "DELETE FROM project_expense WHERE project_id IN (?)",
+      [groupProjectIds]
     );
+
+    let targetProjectData = { architecture_net_amount: 0, expense_net_amount: 0, net_revenue_amount: 0 };
+
+    for (let i = 0; i < groupProjects.length; i++) {
+      const proj = groupProjects[i];
+      const projAmount = Number(proj.amount) || 0;
+      const ratio = totalGroupAmount > 0 ? projAmount / totalGroupAmount : 1 / groupProjects.length;
+
+      let totalExpForProj = 0;
+
+      for (const exp of expenses) {
+        const fullExpAmount = Number(exp.expense_amount) || 0;
+        let expAmountForP = Math.round(fullExpAmount * ratio * 100) / 100;
+        totalExpForProj += expAmountForP;
+
+        await connection.query(
+          `INSERT INTO project_expense 
+           (project_id, expense_category, description, expense_amount)
+           VALUES (?, ?, ?, ?)`,
+          [
+            proj.id,
+            exp.expense_category,
+            exp.description || null,
+            expAmountForP,
+          ]
+        );
+      }
+
+      const archNet = Number(proj.architecture_net_amount) || 0;
+      const netRev = projAmount - archNet - totalExpForProj;
+
+      await connection.query(
+        `UPDATE project 
+         SET expense_net_amount = ?,
+             net_revenue_amount = ?
+         WHERE id = ?`,
+        [totalExpForProj, netRev, proj.id]
+      );
+
+      if (String(proj.id) === String(projectId)) {
+        targetProjectData = {
+          architecture_net_amount: archNet,
+          expense_net_amount: totalExpForProj,
+          net_revenue_amount: netRev,
+        };
+      }
+    }
 
     await connection.commit();
     connection.release();
@@ -412,11 +566,7 @@ router.post("/:id/expenses", authenticateAndAuthorize(), async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Project expenses updated successfully.",
-      data: {
-        architecture_net_amount: architectureNetAmount,
-        expense_net_amount: totalExpenseAmount,
-        net_revenue_amount: netRevenue
-      }
+      data: targetProjectData,
     });
   } catch (error) {
     await connection.rollback();
@@ -435,23 +585,19 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // Fetch existing project to get architecture_net_amount and expense_net_amount
-    const [projectRows] = await connection.query(
-      "SELECT architecture_net_amount, expense_net_amount FROM project WHERE id = ?",
+    const [targetRows] = await connection.query(
+      "SELECT quotation_no FROM project WHERE id = ?",
       [projectId]
     );
-    if (projectRows.length === 0) {
+    if (targetRows.length === 0) {
       connection.release();
       return res.status(404).json({ success: false, message: "Project not found" });
     }
 
-    const archNet = Number(projectRows[0].architecture_net_amount) || 0;
-    const expNet = Number(projectRows[0].expense_net_amount) || 0;
     const gTotal = Number(grand_total) || 0;
     const baseAmt = Number(amount) || 0;
 
-    const netRevenue = baseAmt - archNet - expNet;
-
+    // Update target project amount & basic fields
     await connection.query(
       `UPDATE project 
        SET company_name = ?,
@@ -459,28 +605,135 @@ router.put("/update/:id", authenticateAndAuthorize(), async (req, res) => {
            reference = ?,
            source = ?,
            grand_total = ?,
-           amount = ?,
-           net_revenue_amount = ?
+           amount = ?
        WHERE id = ?`,
-      [company_name, customer_name, reference, source, gTotal, baseAmt, netRevenue, projectId]
+      [company_name, customer_name, reference, source, gTotal, baseAmt, projectId]
     );
+
+    const baseQuotationNo = getBaseQuotationNo(targetRows[0].quotation_no);
+    let groupProjects = [];
+    if (baseQuotationNo) {
+      const [gRows] = await connection.query(
+        "SELECT id, amount, architecture_net_amount, expense_net_amount FROM project WHERE TRIM(SUBSTRING_INDEX(quotation_no, '/', 1)) = ?",
+        [baseQuotationNo]
+      );
+      groupProjects = gRows;
+    }
+    if (groupProjects.length === 0) {
+      const [pRows] = await connection.query(
+        "SELECT id, amount, architecture_net_amount, expense_net_amount FROM project WHERE id = ?",
+        [projectId]
+      );
+      groupProjects = pRows;
+    }
+
+    const totalGroupAmount = groupProjects.reduce(
+      (sum, p) => sum + (Number(p.id === Number(projectId) ? baseAmt : p.amount) || 0),
+      0
+    );
+    const groupProjectIds = groupProjects.map((p) => p.id);
+
+    // Fetch existing architecture items for group
+    const [allArchs] = await connection.query(
+      `SELECT architecture_name, MAX(mobile_no) as mobile_no, MAX(address) as address, MAX(email) as email, SUM(architecture_amount) as architecture_amount, MAX(percentage) as percentage 
+       FROM project_architecture WHERE project_id IN (?) GROUP BY architecture_name`,
+      [groupProjectIds]
+    );
+
+    // Fetch existing expense items for group
+    const [allExps] = await connection.query(
+      `SELECT expense_category, description, SUM(expense_amount) as expense_amount 
+       FROM project_expense WHERE project_id IN (?) GROUP BY expense_category, description`,
+      [groupProjectIds]
+    );
+
+    if (allArchs.length > 0 || allExps.length > 0) {
+      if (allArchs.length > 0) {
+        await connection.query("DELETE FROM project_architecture WHERE project_id IN (?)", [
+          groupProjectIds,
+        ]);
+        for (const proj of groupProjects) {
+          const projAmt = Number(proj.id === Number(projectId) ? baseAmt : proj.amount) || 0;
+          const ratio = totalGroupAmount > 0 ? projAmt / totalGroupAmount : 1 / groupProjects.length;
+          let totalArchForP = 0;
+          for (const arch of allArchs) {
+            const fullAmt = Number(arch.architecture_amount) || 0;
+            const pArchAmt = Math.round(fullAmt * ratio * 100) / 100;
+            totalArchForP += pArchAmt;
+            await connection.query(
+              `INSERT INTO project_architecture (project_id, architecture_name, mobile_no, address, email, architecture_amount, percentage)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                proj.id,
+                arch.architecture_name,
+                arch.mobile_no,
+                arch.address,
+                arch.email,
+                pArchAmt,
+                arch.percentage,
+              ]
+            );
+          }
+          await connection.query("UPDATE project SET architecture_net_amount = ? WHERE id = ?", [
+            totalArchForP,
+            proj.id,
+          ]);
+        }
+      }
+
+      if (allExps.length > 0) {
+        await connection.query("DELETE FROM project_expense WHERE project_id IN (?)", [
+          groupProjectIds,
+        ]);
+        for (const proj of groupProjects) {
+          const projAmt = Number(proj.id === Number(projectId) ? baseAmt : proj.amount) || 0;
+          const ratio = totalGroupAmount > 0 ? projAmt / totalGroupAmount : 1 / groupProjects.length;
+          let totalExpForP = 0;
+          for (const exp of allExps) {
+            const fullAmt = Number(exp.expense_amount) || 0;
+            const pExpAmt = Math.round(fullAmt * ratio * 100) / 100;
+            totalExpForP += pExpAmt;
+            await connection.query(
+              `INSERT INTO project_expense (project_id, expense_category, description, expense_amount)
+               VALUES (?, ?, ?, ?)`,
+              [proj.id, exp.expense_category, exp.description, pExpAmt]
+            );
+          }
+          await connection.query("UPDATE project SET expense_net_amount = ? WHERE id = ?", [
+            totalExpForP,
+            proj.id,
+          ]);
+        }
+      }
+    }
+
+    for (const proj of groupProjects) {
+      const [updatedProjRows] = await connection.query(
+        "SELECT amount, architecture_net_amount, expense_net_amount FROM project WHERE id = ?",
+        [proj.id]
+      );
+      if (updatedProjRows.length > 0) {
+        const pAmt = Number(updatedProjRows[0].amount) || 0;
+        const aNet = Number(updatedProjRows[0].architecture_net_amount) || 0;
+        const eNet = Number(updatedProjRows[0].expense_net_amount) || 0;
+        const nRev = pAmt - aNet - eNet;
+        await connection.query("UPDATE project SET net_revenue_amount = ? WHERE id = ?", [
+          nRev,
+          proj.id,
+        ]);
+      }
+    }
 
     await connection.commit();
     connection.release();
 
+    const [finalTarget] = await db
+      .promise()
+      .query("SELECT * FROM project WHERE id = ?", [projectId]);
     res.status(200).json({
       success: true,
       message: "Project details updated successfully.",
-      data: {
-        id: projectId,
-        company_name,
-        customer_name,
-        reference,
-        source,
-        grand_total: gTotal,
-        amount: baseAmt,
-        net_revenue_amount: netRevenue
-      }
+      data: finalTarget[0] || {},
     });
   } catch (error) {
     await connection.rollback();
