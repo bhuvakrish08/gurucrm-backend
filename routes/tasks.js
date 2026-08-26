@@ -119,6 +119,9 @@ router.post("/insert", authenticateAndAuthorize(), upload.array("files", 5), asy
 
 router.get("/read", async (req, res) => {
 
+    const page = parseInt(req.query.page) || 1;
+    const limitQuery = req.query.limit;
+
     const {
         search,
         task_name,
@@ -131,114 +134,122 @@ router.get("/read", async (req, res) => {
         created_at
     } = req.query;
 
-
-    let sql = `
-        SELECT 
-            t.*,
-            s.name AS status_name
-        FROM tasks t
-        LEFT JOIN task_status s 
-            ON s.id = t.status
-        WHERE 1=1
-    `;
-
+    let whereClause = " WHERE 1=1";
     let params = [];
 
     // Universal Search
     if (search) {
-
-        sql += ` AND (
+        whereClause += ` AND (
             t.task_name LIKE ?
             OR t.assignee LIKE ?
             OR t.created_by_name LIKE ?
             OR t.priority LIKE ?
             OR s.name LIKE ?
         )`;
-
         const sTerm = `%${search}%`;
-
-        params.push(
-            sTerm,
-            sTerm,
-            sTerm,
-            sTerm,
-            sTerm
-        );
-
+        params.push(sTerm, sTerm, sTerm, sTerm, sTerm);
     }
 
     // Task Name
     if (task_name) {
-        sql += " AND t.task_name LIKE ?";
+        whereClause += " AND t.task_name LIKE ?";
         params.push(`%${task_name}%`);
     }
 
     // Status filter (by id)
     if (status) {
-        sql += " AND t.status = ?";
+        whereClause += " AND t.status = ?";
         params.push(status);
     }
 
     // Priority
     if (priority) {
-        sql += " AND t.priority = ?";
+        whereClause += " AND t.priority = ?";
         params.push(priority);
     }
 
     // Assignee
     if (assignee) {
-        sql += " AND t.assignee LIKE ?";
+        whereClause += " AND t.assignee LIKE ?";
         params.push(`%${assignee}%`);
     }
 
     // Start Date
     if (start_from) {
-        sql += " AND DATE(t.start_date) = ?";
+        whereClause += " AND DATE(t.start_date) = ?";
         params.push(start_from);
     }
 
     // Due Date
     if (due_from) {
-        sql += " AND DATE(t.due_date) = ?";
+        whereClause += " AND DATE(t.due_date) = ?";
         params.push(due_from);
     }
 
     // Created By
     if (created_by_name) {
-        sql += " AND t.created_by_name = ?";
+        whereClause += " AND t.created_by_name = ?";
         params.push(created_by_name);
     }
 
     // Created At
     if (created_at) {
-        sql += " AND DATE(t.created_at) = ?";
+        whereClause += " AND DATE(t.created_at) = ?";
         params.push(created_at);
     }
 
-    sql += " ORDER BY t.id ASC";
+    const countSql = `
+        SELECT COUNT(*) AS total
+        FROM tasks t
+        LEFT JOIN task_status s 
+            ON s.id = t.status
+        ${whereClause}
+    `;
 
-    db.query(sql, params, (err, result) => {
-
-        if (err) {
-
-            return res.status(500).json({
-
-                success:false,
-                error: err
-
-            });
-
+    db.query(countSql, params, (cErr, cResult) => {
+        if (cErr) {
+            return res.status(500).json({ success: false, error: cErr });
         }
 
-        res.json({
+        const totalRecords = cResult && cResult[0] ? cResult[0].total : 0;
+        const limit = limitQuery === "all" ? null : (parseInt(limitQuery) || 25);
+        const offset = (page - 1) * (limit || 25);
 
-            success:true,
-            result
+        let sql = `
+            SELECT 
+                t.*,
+                s.name AS status_name
+            FROM tasks t
+            LEFT JOIN task_status s 
+                ON s.id = t.status
+            ${whereClause}
+            ORDER BY t.id ASC
+        `;
 
+        let queryParams = [...params];
+        if (limit !== null) {
+            sql += ` LIMIT ? OFFSET ?`;
+            queryParams.push(limit, offset);
+        }
+
+        db.query(sql, queryParams, (err, result) => {
+            if (err) {
+                return res.status(500).json({ success: false, error: err });
+            }
+
+            res.json({
+                success: true,
+                totalRecords,
+                data: result,
+                pagination: {
+                    total: totalRecords,
+                    page,
+                    limit: limit || totalRecords,
+                    totalPages: limit ? Math.ceil(totalRecords / limit) : 1,
+                },
+            });
         });
-
     });
-
 });
 
 

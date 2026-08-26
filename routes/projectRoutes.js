@@ -6,7 +6,28 @@ const authenticateAndAuthorize = require("../middlewares/authMiddleware");
 // Get All Projects
 router.get("/list", authenticateAndAuthorize(), async (req, res) => {
   try {
-    const [rows] = await db.promise().query(`
+    const page = parseInt(req.query.page) || 1;
+    const limitQuery = req.query.limit;
+    const search = req.query.search ? req.query.search.trim() : "";
+
+    let whereConditions = [];
+    let queryParams = [];
+
+    if (search) {
+      whereConditions.push("(p.company_name LIKE ? OR p.customer_name LIKE ? OR p.quotation_no LIKE ? OR p.reference LIKE ?)");
+      const sTerm = `%${search}%`;
+      queryParams.push(sTerm, sTerm, sTerm, sTerm);
+    }
+
+    const whereClause = whereConditions.length > 0 ? " WHERE " + whereConditions.join(" AND ") : "";
+
+    const [countResult] = await db.promise().query(`SELECT COUNT(*) AS total FROM project p ${whereClause}`, queryParams);
+    const totalRecords = countResult[0]?.total || 0;
+
+    const limit = limitQuery === "all" ? null : (parseInt(limitQuery) || 25);
+    const offset = (page - 1) * (limit || 25);
+
+    let sql = `
         SELECT
           p.id,
           p.quotation_id,
@@ -25,13 +46,28 @@ router.get("/list", authenticateAndAuthorize(), async (req, res) => {
           p.updated_at
         FROM project p
         LEFT JOIN inquiry_lead_source ls ON ls.id = p.source
+        ${whereClause}
         ORDER BY p.id DESC
-      `);
+      `;
+
+    let finalParams = [...queryParams];
+    if (limit !== null) {
+      sql += ` LIMIT ? OFFSET ?`;
+      finalParams.push(limit, offset);
+    }
+
+    const [rows] = await db.promise().query(sql, finalParams);
 
     res.status(200).json({
       success: true,
-      totalRecords: rows.length,
+      totalRecords,
       data: rows,
+      pagination: {
+        total: totalRecords,
+        page,
+        limit: limit || totalRecords,
+        totalPages: limit ? Math.ceil(totalRecords / limit) : 1,
+      },
     });
   } catch (error) {
     console.log(error);

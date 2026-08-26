@@ -6,6 +6,7 @@ const router = express.Router();
 
 // Read all data
 router.get("/read", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=1800, stale-while-revalidate=86400");
   const { search2 = "", status } = req.query;
 
   let query = "SELECT * FROM inquiry_lead_source WHERE 1=1";

@@ -6,6 +6,7 @@ const router = express.Router();
 
 // Read all data
 router.get("/read", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=1800, stale-while-revalidate=86400");
   const { search2 = "", status } = req.query;
 
   let query = "SELECT * FROM task_status WHERE 1=1";
@@ -42,8 +43,18 @@ router.put("/update/:id", (req, res) => {
   const { id } = req.params;
   const { name, status } = req.body;
 
-  const query = "UPDATE task_status SET name = ?, status = ? WHERE id = ?";
-  db.query(query, [name, status || 0, id], (err, result) => {
+  let query = "UPDATE task_status SET name = ?";
+  const params = [name];
+
+  if (status !== undefined) {
+    query += ", status = ?";
+    params.push(status);
+  }
+
+  query += " WHERE id = ?";
+  params.push(id);
+
+  db.query(query, params, (err, result) => {
     if (err) return res.status(500).json(err);
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "Record not found" });

@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 require("dotenv").config();
 // Set Node.js timezone from .env (TZ=Asia/Kolkata) - fixes TIMESTAMPDIFF alignment
 if (process.env.TZ) process.env.TZ = process.env.TZ;
@@ -54,7 +55,8 @@ const strategyMigration = require("./utils/strategyMigration");
 
 
 const app = express();
-app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
+app.use(compression());
+app.use(cors({ origin: process.env.CLIENT_URL, credentials: true, maxAge: 86400 }));
 app.use(express.json());
 
 app.use("/api", loginRoutes);
@@ -103,9 +105,14 @@ app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
-// Run migrations on startup
+const dbIndexInitializer = require("./utils/dbIndexInitializer");
+
+// Run migrations and index optimizations on startup
 strategyMigration.runMigration().catch(err => {
   console.error("Failed to run Strategy Module migrations on startup:", err);
+});
+dbIndexInitializer.initializeIndexes().catch(err => {
+  console.error("Failed to initialize database indexes:", err);
 });
 
 app.listen(process.env.PORT, () => {
