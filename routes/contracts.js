@@ -44,8 +44,18 @@ router.put("/update/:id", (req, res) => {
   const { id } = req.params;
   const { name, status } = req.body;
 
-  const query = "UPDATE contract_types SET name = ?, status = ? WHERE id = ?";
-  db.query(query, [name, status || 0, id], (err, result) => {
+  let query = "UPDATE contract_types SET name = ?";
+  const params = [name];
+
+  if (status !== undefined) {
+    query += ", status = ?";
+    params.push(status);
+  }
+
+  query += " WHERE id = ?";
+  params.push(id);
+
+  db.query(query, params, (err, result) => {
     if (err) return res.status(500).json(err);
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "Record not found" });
@@ -67,59 +77,6 @@ router.put("/status/:id", (req, res) => {
   });
 });
 
-
-const handleColumnScroll = async (column, direction) => {
-  try {
-
-    const offset = scrollOffsets[column] || 0;
-
-    const res = await axios.get(`${APIBase}/get-column-scroll`, {
-      params: {
-        column,
-        direction,
-        offset,
-        limit: itemsPerPage
-      }
-    });
-
-    if (res.data.success) {
-
-      // update offset
-      setScrollOffsets(prev => ({
-        ...prev,
-        [column]: res.data.newOffset
-      }));
-
-      // update ONLY that column
-      setContacts(prevContacts => {
-
-        const updated = [...prevContacts];
-
-        const startIndex = (currentPage - 1) * itemsPerPage;
-
-        for (let i = 0; i < res.data.data.length; i++) {
-
-          if (updated[startIndex + i]) {
-
-            updated[startIndex + i] = {
-              ...updated[startIndex + i],
-              [column]: res.data.data[i][column]
-            };
-
-          }
-
-        }
-
-        return updated;
-
-      });
-
-    }
-
-  } catch (err) {
-    console.error(err);
-  }
-};
 
 
 router.get("/contracts", (req, res) => {

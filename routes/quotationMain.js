@@ -280,6 +280,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.reference,
           l.location,
           l.architecture,
+          l.mobile_no,
           COALESCE(ls.name, l.source) AS source,
           l.assignee AS lead_assignee,
           l.status as lead_status,
@@ -340,6 +341,9 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.company_name, 
           l.customer_name, 
           l.reference, 
+          l.location,
+          l.architecture,
+          l.mobile_no,
           COALESCE(ls.name, l.source) AS source,
           l.assignee AS lead_assignee,
           l.status as lead_status,
@@ -627,6 +631,7 @@ router.post(
         company_name,
         customer_name,
         reference,
+        mobile_no,
         quotation_status,
         follow_up_date,
         quotation_no,
@@ -695,11 +700,12 @@ router.post(
         }
       }
 
-      // Get lead's source
+      // Get lead's source & mobile_no
       let source = null;
+      let leadMobileNo = mobile_no || null;
       if (lead_id) {
         const [leadRows] = await db.promise().query(
-          `SELECT COALESCE(ls.name, l.source) AS source 
+          `SELECT COALESCE(ls.name, l.source) AS source, l.mobile_no 
            FROM lead l 
            LEFT JOIN inquiry_lead_source ls ON ls.id = l.source 
            WHERE l.lead_id = ?`,
@@ -707,6 +713,7 @@ router.post(
         );
         if (leadRows.length > 0) {
           source = leadRows[0].source;
+          if (!leadMobileNo) leadMobileNo = leadRows[0].mobile_no;
         }
       }
 
@@ -805,6 +812,7 @@ router.post(
       } else {
         estimationAssignedAt = new Date();
       }
+
       const [result] = await db.promise().query(
         `INSERT INTO quotation 
          (
@@ -812,6 +820,7 @@ router.post(
           company_name,
           customer_name,
           reference,
+          mobile_no,
           source,
           quotation_status,
           follow_up_date,
@@ -831,12 +840,13 @@ router.post(
           sales_assigned_at,
           estimation_assigned_at
          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
+          leadMobileNo || null,
           source || null,
           quotation_status || "Pending",
           parsedFollowUpDate,
@@ -995,6 +1005,9 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         l.company_name, 
         l.customer_name, 
         l.reference, 
+        l.location,
+        l.architecture,
+        l.mobile_no,
         COALESCE(ls.name, l.source) AS source,
         l.assignee AS lead_assignee,
         l.status as lead_status,
@@ -1208,6 +1221,7 @@ router.put(
         quotation_date,
         activity_type,
         quotation_status,
+        mobile_no,
         amount,
         discount,
         tax,
@@ -1291,6 +1305,7 @@ router.put(
         quotation_date = ?, 
         activity_type = ?, 
         quotation_status = ?,
+        mobile_no = COALESCE(?, mobile_no),
         amount = ?, 
         discount = ?, 
         tax = ?, 
@@ -1306,6 +1321,7 @@ router.put(
           parsedQuotationDate,
           activity_type || null,
           quotation_status || "Pending",
+          mobile_no || null,
           parsedAmount,
           parsedDiscount,
           parsedTax,
@@ -2264,6 +2280,7 @@ router.get(
           q.reference,
           q.location,
           q.architecture,
+          COALESCE(q.mobile_no, l.mobile_no) AS mobile_no,
           q.source,
           q.quotation_status,
           q.follow_up_date,

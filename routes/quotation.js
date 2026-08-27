@@ -44,8 +44,18 @@ router.put("/update/:id", (req, res) => {
   const { id } = req.params;
   const { name, status } = req.body;
 
-  const query = "UPDATE quote_status SET name = ?, status = ? WHERE id = ?";
-  db.query(query, [name, status || 0, id], (err, result) => {
+  let query = "UPDATE quote_status SET name = ?";
+  const params = [name];
+
+  if (status !== undefined) {
+    query += ", status = ?";
+    params.push(status);
+  }
+
+  query += " WHERE id = ?";
+  params.push(id);
+
+  db.query(query, params, (err, result) => {
     if (err) return res.status(500).json(err);
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "Record not found" });

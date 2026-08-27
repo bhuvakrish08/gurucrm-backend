@@ -244,6 +244,9 @@ router.post("/add", authenticateToken(), (req, res) => {
 // Get customer list with search, filters & sorting
 router.get("/get-customers", (req, res) => {
 
+  const page = parseInt(req.query.page) || 1;
+  const limitQuery = req.query.limit;
+
   const {
     search = "",
     customer_name = "",
@@ -272,30 +275,12 @@ router.get("/get-customers", (req, res) => {
       ? "DESC"
       : "ASC";
 
-  let sql = `
-    SELECT 
-      c.id,
-      c.company_name,
-      c.customer_name,
-      c.email,
-      c.mobile,
-      c.customer_type,
-      c.website,
-      c.industry,
-      (
-        SELECT name
-        FROM industries
-        WHERE id = c.industry
-      ) AS industry_name
-    FROM customer_data c
-    WHERE 1=1
-  `;
-
+  let whereSql = ` WHERE 1=1`;
   const values = [];
 
   // GLOBAL SEARCH
   if (search.trim()) {
-    sql += `
+    whereSql += `
       AND (
         c.company_name LIKE ?
         OR c.customer_name LIKE ?
@@ -324,45 +309,88 @@ router.get("/get-customers", (req, res) => {
 
   // FILTERS
   if (company_name.trim()) {
-    sql += " AND c.company_name LIKE ?";
+    whereSql += " AND c.company_name LIKE ?";
     values.push(`%${company_name}%`);
   }
 
   if (customer_name.trim()) {
-    sql += " AND c.customer_name LIKE ?";
+    whereSql += " AND c.customer_name LIKE ?";
     values.push(`%${customer_name}%`);
   }
 
   if (mobile.trim()) {
-    sql += " AND c.mobile LIKE ?";
+    whereSql += " AND c.mobile LIKE ?";
     values.push(`%${mobile}%`);
   }
 
   if (email.trim()) {
-    sql += " AND c.email LIKE ?";
+    whereSql += " AND c.email LIKE ?";
     values.push(`%${email}%`);
   }
 
   if (industry.trim()) {
-    sql += " AND c.industry = ?";
+    whereSql += " AND c.industry = ?";
     values.push(industry);
   }
 
-  sql += ` ORDER BY ${sortColumn} ${sortOrder}`;
+  const countSql = `SELECT COUNT(*) AS total FROM customer_data c ${whereSql}`;
 
-  db.query(sql, values, (err, rows) => {
-    if (err) {
-      console.error("DB Error:", err);
-      return res.status(500).json({
-        success:false,
-        message:"Database error"
-      });
+  db.query(countSql, values, (cErr, cResult) => {
+    if (cErr) {
+      console.error("DB Error:", cErr);
+      return res.status(500).json({ success: false, message: "Database error" });
     }
 
-    res.json({
-      success:true,
-      totalRecords: rows.length,
-      data: rows
+    const totalRecords = cResult && cResult[0] ? cResult[0].total : 0;
+    const limit = limitQuery === "all" ? null : (parseInt(limitQuery) || 25);
+    const offset = (page - 1) * (limit || 25);
+
+    let sql = `
+      SELECT 
+        c.id,
+        c.company_name,
+        c.customer_name,
+        c.email,
+        c.mobile,
+        c.customer_type,
+        c.website,
+        c.industry,
+        (
+          SELECT name
+          FROM industries
+          WHERE id = c.industry
+        ) AS industry_name
+      FROM customer_data c
+      ${whereSql}
+      ORDER BY ${sortColumn} ${sortOrder}
+    `;
+
+    let queryValues = [...values];
+    if (limit !== null) {
+      sql += ` LIMIT ? OFFSET ?`;
+      queryValues.push(limit, offset);
+    }
+
+    db.query(sql, queryValues, (err, rows) => {
+      if (err) {
+        console.error("DB Error:", err);
+        return res.status(500).json({
+          success: false,
+          message: "Database error"
+        });
+      }
+
+      res.json({
+        success: true,
+        totalRecords,
+        data: rows,
+        pagination: {
+          total: totalRecords,
+          page,
+          limit: limit || totalRecords,
+          totalPages: limit ? Math.ceil(totalRecords / limit) : 1,
+        },
+      });
     });
   });
 });
