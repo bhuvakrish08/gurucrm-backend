@@ -170,12 +170,8 @@ async function startServer() {
   }
 }
 
-<<<<<<< Updated upstream
-startServer();
-=======
 // ======================================================
 // START APPLICATION
 // ======================================================
 
 startServer();
->>>>>>> Stashed changes
