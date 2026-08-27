@@ -105,16 +105,32 @@ app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
+const strategyMigration = require("./utils/strategyMigration");
 const dbIndexInitializer = require("./utils/dbIndexInitializer");
 
-// Run migrations and index optimizations on startup
-strategyMigration.runMigration().catch(err => {
-  console.error("Failed to run Strategy Module migrations on startup:", err);
-});
-dbIndexInitializer.initializeIndexes().catch(err => {
-  console.error("Failed to initialize database indexes:", err);
-});
+// Run migrations and start server
+async function startServer() {
+  try {
+    console.log("Running Strategy Module migrations...");
 
-app.listen(process.env.PORT, () => {
-  console.log("Server running on port", process.env.PORT);
-});
+    await strategyMigration.runMigration();
+
+    console.log("Strategy Module migrations completed.");
+
+    console.log("Initializing database indexes...");
+
+    await dbIndexInitializer.initializeIndexes();
+
+    console.log("Database indexes initialized.");
+
+    app.listen(process.env.PORT || 3000, () => {
+      console.log("Server running on port", process.env.PORT || 3000);
+    });
+
+  } catch (error) {
+    console.error("Server startup failed:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
