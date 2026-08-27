@@ -105,9 +105,19 @@ app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
-const dbIndexInitializer = require("./utils/dbIndexInitializer");
+// Backend Health Check
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    message: "Backend is healthy",
+    service: "CRM Backend",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
 
-// Run migrations and index optimizations on startup
+
+// Run migrations on startup
 strategyMigration.runMigration().catch(err => {
   console.error("Failed to run Strategy Module migrations on startup:", err);
 });
