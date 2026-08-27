@@ -2,62 +2,90 @@ const express = require("express");
 const cors = require("cors");
 const compression = require("compression");
 require("dotenv").config();
-// Set Node.js timezone from .env (TZ=Asia/Kolkata) - fixes TIMESTAMPDIFF alignment
-if (process.env.TZ) process.env.TZ = process.env.TZ;
+
+// Set Node.js timezone from .env
+if (process.env.TZ) {
+  process.env.TZ = process.env.TZ;
+}
+
+// ======================================================
+// ROUTES
+// ======================================================
 
 const loginRoutes = require("./routes/loginRoutes");
-const todoRoutes = require("./routes/todos")
-const customerRoutes = require("./routes/customers")
-const contactDesignationRoutes = require("./routes/contactDesignation")
-const organizationRoutes = require("./routes/organizations")
-const roleMasterRoutes = require("./routes/roleMaster")
-const designationMasterRoutes = require("./routes/designationMaster")
-const inquiryLeadCategoryRoutes = require("./routes/inquiryLeadCategory")
-const inquiryLeadSourceRoutes = require("./routes/inquiryLeadSource")
-const inquiryLeadActivityRoutes = require("./routes/inquiryLeadActivity")
-const ticketTypeRoutes = require("./routes/ticketType")
-const ticketSourceRoutes = require("./routes/ticketSource")
-const ticketSupportRoutes = require("./routes/ticketSupport")
-const taskStatusRoutes = require("./routes/taskStatus")
-const expenseCategoryRoutes = require("./routes/expenseCategory")
-const expenseSubCategoryRoutes = require("./routes/expenseSubCategory")
-const contractsRoutes = require("./routes/contracts")
-const quotationRoutes = require("./routes/quotation")
-const productMasterRoutes = require("./routes/productMaster")
-const productCategoryRoutes = require("./routes/productCategory")
-const productUnitRoutes = require("./routes/productUnit")
-const IndustriesRoutes = require("./routes/industries")
-const ContactsRoutes = require("./routes/contacts")
-const OrgNotificationsRoutes = require("./routes/orgNotifications")
-const ManageUsersRoutes = require("./routes/manageUser")
-const InquiryRoutes = require("./routes/inquiry")
-const TasksRoutes = require("./routes/tasks")
-const ContractsRoutes = require("./routes/contracts-list")
+const todoRoutes = require("./routes/todos");
+const customerRoutes = require("./routes/customers");
+const contactDesignationRoutes = require("./routes/contactDesignation");
+const organizationRoutes = require("./routes/organizations");
+const roleMasterRoutes = require("./routes/roleMaster");
+const designationMasterRoutes = require("./routes/designationMaster");
+const inquiryLeadCategoryRoutes = require("./routes/inquiryLeadCategory");
+const inquiryLeadSourceRoutes = require("./routes/inquiryLeadSource");
+const inquiryLeadActivityRoutes = require("./routes/inquiryLeadActivity");
+const ticketTypeRoutes = require("./routes/ticketType");
+const ticketSourceRoutes = require("./routes/ticketSource");
+const ticketSupportRoutes = require("./routes/ticketSupport");
+const taskStatusRoutes = require("./routes/taskStatus");
+const expenseCategoryRoutes = require("./routes/expenseCategory");
+const expenseSubCategoryRoutes = require("./routes/expenseSubCategory");
+const contractsRoutes = require("./routes/contracts");
+const quotationRoutes = require("./routes/quotation");
+const productMasterRoutes = require("./routes/productMaster");
+const productCategoryRoutes = require("./routes/productCategory");
+const productUnitRoutes = require("./routes/productUnit");
+const IndustriesRoutes = require("./routes/industries");
+const ContactsRoutes = require("./routes/contacts");
+const OrgNotificationsRoutes = require("./routes/orgNotifications");
+const ManageUsersRoutes = require("./routes/manageUser");
+const InquiryRoutes = require("./routes/inquiry");
+const TasksRoutes = require("./routes/tasks");
+const ContractsRoutes = require("./routes/contracts-list");
 const lead = require("./routes/lead");
-const lead_follow_up = require('./routes/leadFollowUp')
-const quotationMainRoutes = require('./routes/quotationMain')
-const pi = require('./routes/perfomainvoices')
-const activitiesRoutes = require('./routes/activities');
+const lead_follow_up = require("./routes/leadFollowUp");
+const quotationMainRoutes = require("./routes/quotationMain");
+const pi = require("./routes/perfomainvoices");
+const activitiesRoutes = require("./routes/activities");
 const quotationRevisionRoutes = require("./routes/quotationRevision");
 const calendarRoutes = require("./routes/calender");
 const Architectroutes = require("./routes/Architectroutes");
 const projectRoutes = require("./routes/projectRoutes");
-
 const generalExpenseMasterRoutes = require("./routes/generalExpenseMaster");
 const netProfitRoutes = require("./routes/netProfit");
-
 const upcomingFollowUpRoutes = require("./routes/upcomingFollowUp");
 const strategyRoutes = require("./routes/strategyRoutes");
+
+// ======================================================
+// DATABASE / MIGRATIONS
+// ======================================================
+
 const strategyMigration = require("./utils/strategyMigration");
+const dbIndexInitializer = require("./utils/dbIndexInitializer");
 
-
-
-
+// ======================================================
+// EXPRESS APP
+// ======================================================
 
 const app = express();
+
+// ======================================================
+// MIDDLEWARE
+// ======================================================
+
 app.use(compression());
-app.use(cors({ origin: process.env.CLIENT_URL, credentials: true, maxAge: 86400 }));
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL,
+    credentials: true,
+    maxAge: 86400,
+  })
+);
+
 app.use(express.json());
+
+// ======================================================
+// API ROUTES
+// ======================================================
 
 app.use("/api", loginRoutes);
 app.use("/api/todos", todoRoutes);
@@ -67,9 +95,7 @@ app.use("/api/organizations", organizationRoutes);
 app.use("/api/role-master", roleMasterRoutes);
 app.use("/api/designation-master", designationMasterRoutes);
 app.use("/api/inquiry-lead-category", inquiryLeadCategoryRoutes);
-  
 app.use("/api/inquiry-lead-source", inquiryLeadSourceRoutes);
-
 app.use("/api/inquiry-lead-activity", inquiryLeadActivityRoutes);
 app.use("/api/ticket-type", ticketTypeRoutes);
 app.use("/api/ticket-source", ticketSourceRoutes);
@@ -90,25 +116,34 @@ app.use("/api/inquiry", InquiryRoutes);
 app.use("/api/tasks", TasksRoutes);
 app.use("/api/contracts-list", ContractsRoutes);
 app.use("/api/lead", lead);
-app.use("/api/lead-follow-up",lead_follow_up);
+app.use("/api/lead-follow-up", lead_follow_up);
 app.use("/api/quotation", quotationMainRoutes);
-app.use("/api/pi",pi);
+app.use("/api/pi", pi);
 app.use("/api/activities", activitiesRoutes);
 app.use("/api/quotation-revision", quotationRevisionRoutes);
 app.use("/api/calendar", calendarRoutes);
-app.use("/api/architect",Architectroutes);
+app.use("/api/architect", Architectroutes);
 app.use("/api/project", projectRoutes);
-
 app.use("/api/followup", upcomingFollowUpRoutes);
-
 app.use("/api/general-expense-master", generalExpenseMasterRoutes);
 app.use("/api/net-profit", netProfitRoutes);
 app.use("/api/strategy", strategyRoutes);
 
-const strategyMigration = require("./utils/strategyMigration");
-const dbIndexInitializer = require("./utils/dbIndexInitializer");
+// ======================================================
+// HEALTH CHECK
+// ======================================================
 
-// Run migrations and start server
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Server is running",
+  });
+});
+
+// ======================================================
+// START SERVER
+// ======================================================
+
 async function startServer() {
   try {
     console.log("Running Strategy Module migrations...");
@@ -123,8 +158,10 @@ async function startServer() {
 
     console.log("Database indexes initialized.");
 
-    app.listen(process.env.PORT || 3000, () => {
-      console.log("Server running on port", process.env.PORT || 3000);
+    const PORT = process.env.PORT || 3000;
+
+    app.listen(PORT, () => {
+      console.log("Server running on port", PORT);
     });
 
   } catch (error) {
@@ -133,4 +170,12 @@ async function startServer() {
   }
 }
 
+<<<<<<< Updated upstream
 startServer();
+=======
+// ======================================================
+// START APPLICATION
+// ======================================================
+
+startServer();
+>>>>>>> Stashed changes
