@@ -122,6 +122,10 @@ router.post("/add-followup/:pi_id", async (req, res) => {
     percentage,
     percentage_9,
     percentage_18,
+    amount_9,
+    amount_18,
+    total_9,
+    total_18,
   } = req.body;
 
   try {
@@ -150,43 +154,79 @@ router.post("/add-followup/:pi_id", async (req, res) => {
     );
 
     const grand_total = Number(quoteData[0]?.grand_total || 0);
+    const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
+    const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
 
-    // Current total used across all follow-ups
+    // Current totals used across all follow-ups
     const [currentTotals] = await db.promise().query(
       `SELECT 
+         COALESCE(SUM(COALESCE(total_18, 0)), 0) AS used_amt_18,
+         COALESCE(SUM(COALESCE(total_9, 0)), 0) AS used_amt_9,
          COALESCE(SUM(COALESCE(total_18, 0) + COALESCE(total_9, 0)), 0) AS used_amt,
          COALESCE(SUM(COALESCE(proforma_percentage_18, 0) + COALESCE(proforma_percentage_9, 0)), 0) AS used_pct
        FROM pi_follow_up WHERE pi_id = ?`,
       [pi_id],
     );
 
-    const used_amt = Number(currentTotals[0].used_amt || 0);
-    const used_pct = Number(currentTotals[0].used_pct || 0);
+    const used_amt_18 = Number(currentTotals[0].used_amt_18 || 0);
+    const used_amt_9  = Number(currentTotals[0].used_amt_9 || 0);
+    const used_amt    = Number(currentTotals[0].used_amt || 0);
 
-    let new_amt = 0;
-    let new_pct_18 = 0;
-    let new_pct_9 = 0;
+    let new_total_18 = 0;
+    let new_total_9  = 0;
+    let new_pct_18   = 0;
+    let new_pct_9    = 0;
 
-    if (amount !== undefined && amount !== null && amount !== "") {
-      new_amt = Number(amount || 0);
-      new_pct_18 = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+    const isSplitInput = (amount_18 !== undefined && amount_18 !== null && amount_18 !== "") ||
+                         (amount_9 !== undefined && amount_9 !== null && amount_9 !== "") ||
+                         (total_18 !== undefined && total_18 !== null && total_18 !== "") ||
+                         (total_9 !== undefined && total_9 !== null && total_9 !== "");
+
+    if (isSplitInput) {
+      new_total_18 = Number(amount_18 ?? total_18 ?? 0);
+      new_total_9  = Number(amount_9 ?? total_9 ?? 0);
+
+      if (base_amt_18 > 0 && (used_amt_18 + new_total_18 > base_amt_18 + 0.5)) {
+        const rem = Math.max(0, base_amt_18 - used_amt_18);
+        return res.status(400).json({
+          message: `Amount for Part 1 exceeds remaining balance. Only Rs. ${rem.toFixed(2)} remaining`,
+        });
+      }
+      if (base_amt_9 > 0 && (used_amt_9 + new_total_9 > base_amt_9 + 0.5)) {
+        const rem = Math.max(0, base_amt_9 - used_amt_9);
+        return res.status(400).json({
+          message: `Amount for Part 2 exceeds remaining balance. Only Rs. ${rem.toFixed(2)} remaining`,
+        });
+      }
+
+      new_pct_18 = base_amt_18 > 0 ? (new_total_18 / base_amt_18) * 100 : (grand_total > 0 ? (new_total_18 / grand_total) * 100 : 0);
+      new_pct_9  = base_amt_9 > 0 ? (new_total_9 / base_amt_9) * 100 : 0;
+    } else if (amount !== undefined && amount !== null && amount !== "") {
+      const new_amt = Number(amount || 0);
+      if (grand_total > 0 && (used_amt + new_amt > grand_total + 0.5)) {
+        const remaining_amt = Math.max(0, grand_total - used_amt);
+        return res.status(400).json({
+          message: `Amount exceeds remaining PI balance. Only Rs. ${remaining_amt.toFixed(2)} remaining`,
+        });
+      }
+      new_total_18 = new_amt;
+      new_total_9  = 0;
+      new_pct_18   = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+      new_pct_9    = 0;
     } else {
       new_pct_9  = Number(percentage_9  || 0);
       new_pct_18 = Number(percentage_18 || 0);
-      const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
-      const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
-      new_amt = ((base_amt_9 * new_pct_9) / 100) + ((base_amt_18 * new_pct_18) / 100);
+      new_total_9  = (base_amt_9 * new_pct_9) / 100;
+      new_total_18 = (base_amt_18 * new_pct_18) / 100;
     }
 
+    const new_amt = new_total_18 + new_total_9;
     if (grand_total > 0 && (used_amt + new_amt > grand_total + 0.5)) {
       const remaining_amt = Math.max(0, grand_total - used_amt);
       return res.status(400).json({
         message: `Amount exceeds remaining PI balance. Only Rs. ${remaining_amt.toFixed(2)} remaining`,
       });
     }
-
-    const new_total_18 = new_amt;
-    const new_total_9 = 0;
 
     // Insert follow-up
     await db.promise().query(
@@ -415,7 +455,16 @@ router.get("/filter", async (req, res) => {
 // ============================================================
 router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
   const { pi_id, follow_id } = req.params;
-  const { amount, percentage, percentage_9, percentage_18 } = req.body;
+  const {
+    amount,
+    percentage,
+    percentage_9,
+    percentage_18,
+    amount_9,
+    amount_18,
+    total_9,
+    total_18,
+  } = req.body;
 
   try {
     const [latest] = await db.promise().query(
@@ -448,30 +497,71 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
     );
 
     const grand_total = Number(quoteData[0]?.grand_total || 0);
+    const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
+    const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
 
     const [otherTotals] = await db.promise().query(
-      `SELECT COALESCE(SUM(COALESCE(total_18, 0) + COALESCE(total_9, 0)), 0) AS other_used_amt
+      `SELECT 
+         COALESCE(SUM(COALESCE(total_18, 0)), 0) AS other_used_amt_18,
+         COALESCE(SUM(COALESCE(total_9, 0)), 0) AS other_used_amt_9,
+         COALESCE(SUM(COALESCE(total_18, 0) + COALESCE(total_9, 0)), 0) AS other_used_amt
        FROM pi_follow_up WHERE pi_id = ? AND id != ?`,
       [pi_id, follow_id],
     );
 
-    const other_used_amt = Number(otherTotals[0].other_used_amt || 0);
+    const other_used_amt_18 = Number(otherTotals[0].other_used_amt_18 || 0);
+    const other_used_amt_9  = Number(otherTotals[0].other_used_amt_9 || 0);
+    const other_used_amt    = Number(otherTotals[0].other_used_amt || 0);
 
-    let new_amt = 0;
-    let new_pct_18 = 0;
-    let new_pct_9 = 0;
+    let new_total_18 = 0;
+    let new_total_9  = 0;
+    let new_pct_18   = 0;
+    let new_pct_9    = 0;
 
-    if (amount !== undefined && amount !== null && amount !== "") {
-      new_amt = Number(amount || 0);
-      new_pct_18 = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+    const isSplitInput = (amount_18 !== undefined && amount_18 !== null && amount_18 !== "") ||
+                         (amount_9 !== undefined && amount_9 !== null && amount_9 !== "") ||
+                         (total_18 !== undefined && total_18 !== null && total_18 !== "") ||
+                         (total_9 !== undefined && total_9 !== null && total_9 !== "");
+
+    if (isSplitInput) {
+      new_total_18 = Number(amount_18 ?? total_18 ?? 0);
+      new_total_9  = Number(amount_9 ?? total_9 ?? 0);
+
+      if (base_amt_18 > 0 && (other_used_amt_18 + new_total_18 > base_amt_18 + 0.5)) {
+        const rem = Math.max(0, base_amt_18 - other_used_amt_18);
+        return res.status(400).json({
+          message: `Amount for Part 1 exceeds remaining balance. Only Rs. ${rem.toFixed(2)} remaining`,
+        });
+      }
+      if (base_amt_9 > 0 && (other_used_amt_9 + new_total_9 > base_amt_9 + 0.5)) {
+        const rem = Math.max(0, base_amt_9 - other_used_amt_9);
+        return res.status(400).json({
+          message: `Amount for Part 2 exceeds remaining balance. Only Rs. ${rem.toFixed(2)} remaining`,
+        });
+      }
+
+      new_pct_18 = base_amt_18 > 0 ? (new_total_18 / base_amt_18) * 100 : (grand_total > 0 ? (new_total_18 / grand_total) * 100 : 0);
+      new_pct_9  = base_amt_9 > 0 ? (new_total_9 / base_amt_9) * 100 : 0;
+    } else if (amount !== undefined && amount !== null && amount !== "") {
+      const new_amt = Number(amount || 0);
+      if (grand_total > 0 && (other_used_amt + new_amt > grand_total + 0.5)) {
+        const remaining_amt = Math.max(0, grand_total - other_used_amt);
+        return res.status(400).json({
+          message: `Amount exceeds remaining PI balance. Only Rs. ${remaining_amt.toFixed(2)} remaining`,
+        });
+      }
+      new_total_18 = new_amt;
+      new_total_9  = 0;
+      new_pct_18   = grand_total > 0 ? (new_amt / grand_total) * 100 : Number(percentage || 0);
+      new_pct_9    = 0;
     } else {
       new_pct_9  = Number(percentage_9  || 0);
       new_pct_18 = Number(percentage_18 || 0);
-      const base_amt_9  = Number(quoteData[0]?.amount_9 || 0) + Number(quoteData[0]?.tax_9  || 0);
-      const base_amt_18 = Number(quoteData[0]?.amount_18 || 0) + Number(quoteData[0]?.tax_18 || 0);
-      new_amt = ((base_amt_9 * new_pct_9) / 100) + ((base_amt_18 * new_pct_18) / 100);
+      new_total_9  = (base_amt_9 * new_pct_9) / 100;
+      new_total_18 = (base_amt_18 * new_pct_18) / 100;
     }
 
+    const new_amt = new_total_18 + new_total_9;
     if (grand_total > 0 && (other_used_amt + new_amt > grand_total + 0.5)) {
       const remaining_amt = Math.max(0, grand_total - other_used_amt);
       return res.status(400).json({
@@ -482,9 +572,9 @@ router.put("/update-followup/:pi_id/:follow_id", async (req, res) => {
     await db.promise().query(
       `UPDATE pi_follow_up 
        SET proforma_percentage_9 = ?, proforma_percentage_18 = ?,
-           total_9 = 0, total_18 = ?
+           total_9 = ?, total_18 = ?
        WHERE id = ?`,
-      [new_pct_9, new_pct_18, new_amt, follow_id],
+      [new_pct_9, new_pct_18, new_total_9, new_total_18, follow_id],
     );
 
     const [totals] = await db.promise().query(

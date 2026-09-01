@@ -298,7 +298,10 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.proforma_percentage,
           q.assignee,
           q.assignee_log,
-          q.follow_up_date,
+          COALESCE(
+            (SELECT qr.follow_up_date FROM quotation_revision qr WHERE qr.quotation_id = q.id ORDER BY qr.id DESC LIMIT 1),
+            q.follow_up_date
+          ) AS follow_up_date,
           q.updated_by,
           q.updated_at,
           q.created_at as quotation_created_at,
@@ -306,7 +309,6 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
           l.won_at,
           q.sales_assigned_at,
-          q.estimation_assigned_at,
           q.estimation_assigned_at
         FROM lead l
         LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
@@ -361,7 +363,10 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           q.proforma_percentage,
           q.assignee,
           q.assignee_log,
-          q.follow_up_date,
+          COALESCE(
+            (SELECT qr.follow_up_date FROM quotation_revision qr WHERE qr.quotation_id = q.id ORDER BY qr.id DESC LIMIT 1),
+            q.follow_up_date
+          ) AS follow_up_date,
           q.updated_by,
           q.updated_at,
           q.created_at as quotation_created_at,
@@ -369,7 +374,6 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
           l.won_at,
           q.sales_assigned_at,
-          q.estimation_assigned_at,
           q.estimation_assigned_at
         FROM lead l
         LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
@@ -1023,7 +1027,10 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         q.description,
         q.lost_reason,
         q.assignee,
-        q.follow_up_date,
+        COALESCE(
+          (SELECT qr.follow_up_date FROM quotation_revision qr WHERE qr.quotation_id = q.id ORDER BY qr.id DESC LIMIT 1),
+          q.follow_up_date
+        ) AS follow_up_date,
         q.updated_by,
         q.updated_at,
         q.created_at as quotation_created_at,
@@ -2283,7 +2290,10 @@ router.get(
           COALESCE(q.mobile_no, l.mobile_no) AS mobile_no,
           q.source,
           q.quotation_status,
-          q.follow_up_date,
+          COALESCE(
+            (SELECT qr.follow_up_date FROM quotation_revision qr WHERE qr.quotation_id = q.id ORDER BY qr.id DESC LIMIT 1),
+            q.follow_up_date
+          ) AS follow_up_date,
           q.quotation_no,
           q.quotation_date,
           q.grand_total,

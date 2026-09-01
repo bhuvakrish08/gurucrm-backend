@@ -64,27 +64,76 @@ async function initializeIndexes() {
     }
   }
 
-  // Ensure mobile_no column exists in quotation table
-  try {
-    const [cols] = await db
-      .promise()
-      .query(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'quotation' AND COLUMN_NAME = 'mobile_no'`
-      );
-    if (cols.length === 0) {
-      await db
+  // Ensure required columns exist in quotation table
+  const quotationRequiredColumns = [
+    { name: "mobile_no", type: "VARCHAR(20) DEFAULT NULL" },
+    { name: "lost_reason", type: "TEXT DEFAULT NULL" },
+    { name: "activity_type", type: "VARCHAR(100) DEFAULT NULL" },
+    { name: "proforma_percentage", type: "DECIMAL(5,2) DEFAULT NULL" },
+    { name: "assignee_log", type: "TEXT DEFAULT NULL" },
+    { name: "sales_assigned_at", type: "DATETIME DEFAULT NULL" },
+    { name: "estimation_assigned_at", type: "DATETIME DEFAULT NULL" },
+  ];
+
+  for (const col of quotationRequiredColumns) {
+    try {
+      const [cols] = await db
         .promise()
-        .query(`ALTER TABLE \`quotation\` ADD COLUMN \`mobile_no\` VARCHAR(20) DEFAULT NULL AFTER \`reference\``);
-      console.log(`⚡ Added column mobile_no to quotation table`);
+        .query(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'quotation' AND COLUMN_NAME = ?`,
+          [col.name]
+        );
+      if (cols.length === 0) {
+        await db
+          .promise()
+          .query(`ALTER TABLE \`quotation\` ADD COLUMN \`${col.name}\` ${col.type}`);
+        console.log(`⚡ Added column ${col.name} to quotation table`);
+      }
+    } catch (err) {
+      console.warn(`[Column Migration Warning] quotation.${col.name}:`, err.message);
     }
-    // Populate missing mobile_no from lead table
+  }
+
+  // Populate missing mobile_no from lead table if available
+  try {
     await db
       .promise()
       .query(
         `UPDATE quotation q JOIN lead l ON q.lead_id = l.lead_id SET q.mobile_no = l.mobile_no WHERE (q.mobile_no IS NULL OR q.mobile_no = '') AND l.mobile_no IS NOT NULL AND l.mobile_no != ''`
       );
   } catch (err) {
-    console.warn(`[Column Migration Warning] mobile_no:`, err.message);
+    console.warn(`[Column Migration Warning] mobile_no populate:`, err.message);
+  }
+
+  // Ensure location, architecture, category, priority, description, lost_reason, won_at, followup_status columns exist in lead table
+  const leadRequiredColumns = [
+    { name: "location", type: "VARCHAR(255) DEFAULT NULL" },
+    { name: "architecture", type: "VARCHAR(255) DEFAULT NULL" },
+    { name: "category", type: "VARCHAR(255) DEFAULT NULL" },
+    { name: "priority", type: "VARCHAR(100) DEFAULT NULL" },
+    { name: "description", type: "TEXT DEFAULT NULL" },
+    { name: "lost_reason", type: "TEXT DEFAULT NULL" },
+    { name: "won_at", type: "DATETIME DEFAULT NULL" },
+    { name: "followup_status", type: "VARCHAR(20) DEFAULT NULL" },
+  ];
+
+  for (const col of leadRequiredColumns) {
+    try {
+      const [cols] = await db
+        .promise()
+        .query(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lead' AND COLUMN_NAME = ?`,
+          [col.name]
+        );
+      if (cols.length === 0) {
+        await db
+          .promise()
+          .query(`ALTER TABLE \`lead\` ADD COLUMN \`${col.name}\` ${col.type}`);
+        console.log(`⚡ Added column ${col.name} to lead table`);
+      }
+    } catch (err) {
+      console.warn(`[Column Migration Warning] lead.${col.name}:`, err.message);
+    }
   }
 }
 

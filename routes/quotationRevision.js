@@ -168,6 +168,13 @@ router.post("/insert",
 
       const quotationRevisionId = result.insertId;
 
+      if (follow_up_date) {
+        await db.promise().query(
+          "UPDATE quotation SET follow_up_date = ? WHERE id = ?",
+          [follow_up_date, quotation_id]
+        );
+      }
+
       // ======================================
       // INSERT FILES
       // ======================================
