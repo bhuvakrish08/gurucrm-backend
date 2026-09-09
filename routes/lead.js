@@ -13,6 +13,10 @@ const RED_HOURS = parseFloat(process.env.RED_HOURS) || 48;
 ===================================== */
 router.get("/read", authenticateAndAuthorize(), (req, res) => {
   const loggedInRole = req.user.role;
+  const page = parseInt(req.query.page) || 1;
+  const limitQuery = req.query.limit;
+  const search = req.query.search ? req.query.search.trim() : "";
+  const statusFilter = req.query.status ? req.query.status.trim() : "";
 
   db.query(
     "SELECT name FROM users WHERE id = ?",
@@ -80,6 +84,7 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       ) last_fu ON last_fu.lead_id = l.lead_id
     `;
 
+      let whereConditions = [];
       let values = [];
 
       if (
@@ -89,20 +94,114 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
         loggedInRole !== "Sales" &&
         loggedInRole !== "Estimation"
       ) {
-        sql += `
-        WHERE (FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)
-      `;
+        whereConditions.push("(FIND_IN_SET(?, REPLACE(l.assignee, ', ', ',')) OR l.created_by = ?)");
         values.push(loggedInUser, loggedInUser);
       }
 
-      sql += ` ORDER BY l.lead_id DESC`;
+      if (search) {
+        whereConditions.push("(l.company_name LIKE ? OR l.customer_name LIKE ? OR l.mobile_no LIKE ? OR l.assignee LIKE ? OR l.reference LIKE ? OR l.location LIKE ?)");
+        const sTerm = `%${search}%`;
+        values.push(sTerm, sTerm, sTerm, sTerm, sTerm, sTerm);
+      }
 
-      db.query(sql, values, (err, result) => {
-        if (err) {
-          console.log(err);
-          return res.status(500).json({ success: false, error: err });
+      if (statusFilter && statusFilter !== "All") {
+        whereConditions.push("l.status = ?");
+        values.push(statusFilter);
+      }
+
+      let whereClause = whereConditions.length > 0 ? " WHERE " + whereConditions.join(" AND ") : "";
+
+      let countSql = `SELECT COUNT(*) AS total FROM lead l ${whereClause}`;
+      db.query(countSql, values, (cErr, cResult) => {
+        if (cErr) {
+          console.log(cErr);
+          return res.status(500).json({ success: false, error: cErr });
         }
-        res.json({ success: true, result });
+
+        const total = cResult && cResult[0] ? cResult[0].total : 0;
+        const limit = limitQuery === "all" ? null : (parseInt(limitQuery) || 25);
+        const offset = (page - 1) * (limit || 25);
+
+        let sql = `
+        SELECT 
+      l.lead_id,
+      l.company_name,
+      l.customer_name,
+      l.mobile_no,
+      l.reference,
+      COALESCE(ls.name, l.source) AS source,
+      l.assignee,
+      l.location,
+      l.architecture,
+      l.status,
+      l.lost_reason,
+      l.created_at,
+      l.updated_by,
+      l.updated_at,
+      NOW() AS server_time,
+      (
+        SELECT f.follow_up_date
+        FROM lead_follow_up f
+        WHERE f.lead_id = l.lead_id
+        ORDER BY f.follow_up_date DESC
+        LIMIT 1
+      ) AS next_follow_up_date,
+      TIMESTAMPDIFF(HOUR,
+        COALESCE(last_fu.last_followup_at, l.created_at),
+        NOW()
+      ) AS hours_since_last_activity,
+      CASE
+        WHEN l.status = 'Won' THEN
+          CASE
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${RED_HOURS} THEN 'red'
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${YELLOW_HOURS} THEN 'yellow'
+            ELSE 'green'
+          END
+        WHEN l.status = 'Lost' THEN COALESCE(l.followup_status, 'green')
+        WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
+          COALESCE(last_fu.last_followup_at, l.created_at),
+          NOW()
+        ) / 3600.0 >= ${RED_HOURS} THEN 'red'
+        WHEN l.followup_status = 'yellow' OR TIMESTAMPDIFF(SECOND,
+          COALESCE(last_fu.last_followup_at, l.created_at),
+          NOW()
+        ) / 3600.0 >= ${YELLOW_HOURS} THEN 'yellow'
+        ELSE 'green'
+      END AS follow_up_status
+        FROM lead l
+        LEFT JOIN inquiry_lead_source ls
+          ON ls.id = l.source
+        LEFT JOIN (
+          SELECT lead_id, MAX(created_at) AS last_followup_at
+          FROM lead_follow_up
+          GROUP BY lead_id
+        ) last_fu ON last_fu.lead_id = l.lead_id
+        ${whereClause}
+        ORDER BY l.lead_id DESC
+      `;
+
+        let queryValues = [...values];
+        if (limit !== null) {
+          sql += ` LIMIT ? OFFSET ?`;
+          queryValues.push(limit, offset);
+        }
+
+        db.query(sql, queryValues, (err, result) => {
+          if (err) {
+            console.log(err);
+            return res.status(500).json({ success: false, error: err });
+          }
+          res.json({
+            success: true,
+            result,
+            pagination: {
+              total,
+              page,
+              limit: limit || total,
+              totalPages: limit ? Math.ceil(total / limit) : 1,
+            },
+          });
+        });
       });
     },
   );
@@ -913,7 +1012,13 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
         NOW()
       ) AS hours_since_last_activity,
       CASE
-        WHEN l.status IN ('Won', 'Lost') THEN COALESCE(l.followup_status, 'green')
+        WHEN l.status = 'Won' THEN
+          CASE
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${RED_HOURS} THEN 'red'
+            WHEN TIMESTAMPDIFF(SECOND, l.created_at, COALESCE(l.won_at, l.updated_at, NOW())) / 3600.0 > ${YELLOW_HOURS} THEN 'yellow'
+            ELSE 'green'
+          END
+        WHEN l.status = 'Lost' THEN COALESCE(l.followup_status, 'green')
         WHEN l.followup_status = 'red' OR TIMESTAMPDIFF(SECOND,
           COALESCE(last_fu.last_followup_at, l.created_at),
           NOW()

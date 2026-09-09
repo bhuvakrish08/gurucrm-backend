@@ -9,7 +9,11 @@ router.get("/read", async (req, res) => {
 
   try {
 
+    const page = parseInt(req.query.page) || 1;
+    const limitQuery = req.query.limit;
+
     const {
+      search,
       search1,
       search2,
       search3,
@@ -18,10 +22,59 @@ router.get("/read", async (req, res) => {
       search6,
     } = req.query;
 
+    let whereClause = " WHERE 1=1";
+    const params = [];
+
+    if (search) {
+      whereClause += " AND (c.company_name LIKE ? OR c.customer_name LIKE ? OR c.contact_person LIKE ? OR c.contact_number LIKE ? OR c.email LIKE ?)";
+      const sTerm = `%${search}%`;
+      params.push(sTerm, sTerm, sTerm, sTerm, sTerm);
+    }
+
+    // company name filter
+    if (search1) {
+      whereClause += " AND c.company_name LIKE ?";
+      params.push(`%${search1}%`);
+    }
+
+    // customer name
+    if (search2) {
+      whereClause += " AND c.customer_name LIKE ?";
+      params.push(`%${search2}%`);
+    }
+
+    // contact person
+    if (search3) {
+      whereClause += " AND c.contact_person LIKE ?";
+      params.push(`%${search3}%`);
+    }
+
+    // contact number
+    if (search4) {
+      whereClause += " AND c.contact_number LIKE ?";
+      params.push(`%${search4}%`);
+    }
+
+    // email
+    if (search5) {
+      whereClause += " AND c.email LIKE ?";
+      params.push(`%${search5}%`);
+    }
+
+    // designation filter (by id)
+    if (search6) {
+      whereClause += " AND c.contact_designation = ?";
+      params.push(search6);
+    }
+
+    const [countResult] = await db.promise().query(`SELECT COUNT(*) AS total FROM contacts c ${whereClause}`, params);
+    const totalRecords = countResult[0]?.total || 0;
+
+    const limit = limitQuery === "all" ? null : (parseInt(limitQuery) || 25);
+    const offset = (page - 1) * (limit || 25);
+
     let query = `
-
       SELECT 
-
         c.id,
         c.customer_id,
         c.company_name,
@@ -32,59 +85,30 @@ router.get("/read", async (req, res) => {
         c.contact_designation,
         d.name AS designation_name
       FROM contacts c
-
       LEFT JOIN contact_designation d
         ON c.contact_designation = d.id
-
-      WHERE 1=1
-
+      ${whereClause}
+      ORDER BY c.id ASC
     `;
 
-    const params = [];
-
-    // company name filter
-    if (search1) {
-      query += " AND c.company_name LIKE ?";
-      params.push(`%${search1}%`);
+    let queryParams = [...params];
+    if (limit !== null) {
+      query += ` LIMIT ? OFFSET ?`;
+      queryParams.push(limit, offset);
     }
 
-    // customer name
-    if (search2) {
-      query += " AND c.customer_name LIKE ?";
-      params.push(`%${search2}%`);
-    }
-
-    // contact person
-    if (search3) {
-      query += " AND c.contact_person LIKE ?";
-      params.push(`%${search3}%`);
-    }
-
-    // contact number
-    if (search4) {
-      query += " AND c.contact_number LIKE ?";
-      params.push(`%${search4}%`);
-    }
-
-    // email
-    if (search5) {
-      query += " AND c.email LIKE ?";
-      params.push(`%${search5}%`);
-    }
-
-    // designation filter (by id)
-    if (search6) {
-      query += " AND c.contact_designation = ?";
-      params.push(search6);
-    }
-
-    query += " ORDER BY c.id ASC";
-
-    const [rows] = await db.promise().query(query, params);
+    const [rows] = await db.promise().query(query, queryParams);
 
     res.json({
       success: true,
-      data: rows
+      totalRecords,
+      data: rows,
+      pagination: {
+        total: totalRecords,
+        page,
+        limit: limit || totalRecords,
+        totalPages: limit ? Math.ceil(totalRecords / limit) : 1,
+      },
     });
 
   } catch (err) {
