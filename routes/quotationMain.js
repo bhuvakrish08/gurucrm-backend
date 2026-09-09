@@ -276,6 +276,11 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.location,
           l.architecture,
           COALESCE(ls.name, l.source) AS source,
+          COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
+          ssc.name AS strategy_category_name,
+          ssc.code AS strategy_category_code,
+          ssc.badge_background AS strategy_category_badge_bg,
+          ssc.badge_text_color AS strategy_category_badge_text,
           l.assignee AS lead_assignee,
           l.status as lead_status,
           q.id as latest_quotation_id,
@@ -314,6 +319,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
         ) q ON l.lead_id = q.lead_id
+        LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
         LEFT JOIN (
           SELECT lead_id, MIN(created_at) as first_quotation_date
           FROM quotation
@@ -336,6 +342,11 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.customer_name, 
           l.reference, 
           COALESCE(ls.name, l.source) AS source,
+          COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
+          ssc.name AS strategy_category_name,
+          ssc.code AS strategy_category_code,
+          ssc.badge_background AS strategy_category_badge_bg,
+          ssc.badge_text_color AS strategy_category_badge_text,
           l.assignee AS lead_assignee,
           l.status as lead_status,
           q.id as latest_quotation_id,
@@ -374,6 +385,7 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
         ) q ON l.lead_id = q.lead_id
+        LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
         LEFT JOIN (
           SELECT lead_id, MIN(created_at) as first_quotation_date
           FROM quotation
@@ -506,8 +518,15 @@ router.get("/history/:lead_id", async (req, res) => {
       .promise()
       .query(
         `SELECT q.*, 
+                COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
+                ssc.name AS strategy_category_name,
+                ssc.code AS strategy_category_code,
+                ssc.badge_background AS strategy_category_badge_bg,
+                ssc.badge_text_color AS strategy_category_badge_text,
                 qs.amount_9, qs.amount_18, qs.tax_percent_9, qs.tax_percent_18, qs.tax_9, qs.tax_18, qs.grand_total as split_grand_total
          FROM quotation q
+         LEFT JOIN lead l ON l.lead_id = q.lead_id
+         LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
          LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
          WHERE q.lead_id = ? 
          ORDER BY q.id DESC`,
@@ -622,6 +641,7 @@ router.post(
         company_name,
         customer_name,
         reference,
+        strategy_category_id,
         quotation_status,
         follow_up_date,
         quotation_no,
@@ -690,11 +710,12 @@ router.post(
         }
       }
 
-      // Get lead's source
+      // Get lead's source and strategy_category_id
       let source = null;
+      let leadStrategyCatId = null;
       if (lead_id) {
         const [leadRows] = await db.promise().query(
-          `SELECT COALESCE(ls.name, l.source) AS source 
+          `SELECT COALESCE(ls.name, l.source) AS source, l.strategy_category_id 
            FROM lead l 
            LEFT JOIN inquiry_lead_source ls ON ls.id = l.source 
            WHERE l.lead_id = ?`,
@@ -702,8 +723,13 @@ router.post(
         );
         if (leadRows.length > 0) {
           source = leadRows[0].source;
+          leadStrategyCatId = leadRows[0].strategy_category_id;
         }
       }
+
+      const finalStrategyCategoryId = strategy_category_id
+        ? Number(strategy_category_id)
+        : (leadStrategyCatId ? Number(leadStrategyCatId) : null);
 
       // Safe Numeric Parser
       const parseNum = (val) => {
@@ -808,6 +834,7 @@ router.post(
           customer_name,
           reference,
           source,
+          strategy_category_id,
           quotation_status,
           follow_up_date,
           quotation_no,
@@ -826,13 +853,14 @@ router.post(
           sales_assigned_at,
           estimation_assigned_at
          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
           source || null,
+          finalStrategyCategoryId,
           quotation_status || "Pending",
           parsedFollowUpDate,
           quotation_no || null,
@@ -991,6 +1019,11 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         l.customer_name, 
         l.reference, 
         COALESCE(ls.name, l.source) AS source,
+        COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
+        ssc.name AS strategy_category_name,
+        ssc.code AS strategy_category_code,
+        ssc.badge_background AS strategy_category_badge_bg,
+        ssc.badge_text_color AS strategy_category_badge_text,
         l.assignee AS lead_assignee,
         l.status as lead_status,
         q.id as latest_quotation_id,
@@ -1027,6 +1060,7 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
           GROUP BY lead_id
         ) q2 ON q1.id = q2.max_id
       ) q ON l.lead_id = q.lead_id
+      LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
       LEFT JOIN (
         SELECT lead_id, MIN(created_at) as first_quotation_date
         FROM quotation

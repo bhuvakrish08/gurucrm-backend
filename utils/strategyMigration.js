@@ -154,6 +154,9 @@ async function runMigration(databasePool = db) {
     await safeAlter("ALTER TABLE strategy_quarter_allocations ADD COLUMN status VARCHAR(50) NOT NULL DEFAULT 'CONFIRMED'");
     await safeAlter("ALTER TABLE strategy_quarter_allocations ADD COLUMN source_closing_amount DECIMAL(15,2) NOT NULL DEFAULT 0.00");
     await safeAlter("ALTER TABLE strategy_adjustments ADD COLUMN is_active INT(11) NOT NULL DEFAULT 1");
+    await safeAlter("ALTER TABLE quotation ADD COLUMN strategy_category_id INT(11) NULL");
+    await safeAlter("ALTER TABLE lead ADD COLUMN strategy_category_id INT(11) NULL");
+    await safeAlter("ALTER TABLE strategy_source_mappings ADD COLUMN is_default INT(11) NOT NULL DEFAULT 0");
 
     console.log("✅ Strategy Module migrations & seeding completed successfully.");
     return { success: true };

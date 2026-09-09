@@ -8,7 +8,7 @@ const router = express.Router();
 router.get("/read", (req, res) => {
   const { search2 = "", status } = req.query;
 
-  let query = "SELECT * FROM inquiry_lead_source WHERE 1=1";
+  let query = "SELECT id, name, status, allow_category_selection FROM inquiry_lead_source WHERE 1=1";
   const params = [];
 
   if (search2) {
@@ -29,22 +29,33 @@ router.get("/read", (req, res) => {
 
 // Insert data
 router.post("/insert", (req, res) => {
-  const { name } = req.body;
+  const { name, allow_category_selection = 0 } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ status: 0, message: "Source name is required" });
+  }
 
-  const query = "INSERT INTO inquiry_lead_source (name) VALUES (?)";
-  db.query(query, [name], (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json({ status: 1, message: "Inserted successfully", result });
+  const checkQuery = "SELECT id, name FROM inquiry_lead_source WHERE TRIM(LOWER(name)) = TRIM(LOWER(?)) LIMIT 1";
+  db.query(checkQuery, [name.trim()], (checkErr, checkRows) => {
+    if (checkErr) return res.status(500).json(checkErr);
+    if (checkRows && checkRows.length > 0) {
+      return res.status(400).json({ status: 0, message: "A source with this name already exists" });
+    }
+
+    const query = "INSERT INTO inquiry_lead_source (name, allow_category_selection) VALUES (?, ?)";
+    db.query(query, [name.trim(), allow_category_selection ? 1 : 0], (err, result) => {
+      if (err) return res.status(500).json(err);
+      res.json({ status: 1, message: "Inserted successfully", result });
+    });
   });
 });
 
 // Update data
 router.put("/update/:id", (req, res) => {
   const { id } = req.params;
-  const { name } = req.body;
+  const { name, allow_category_selection } = req.body;
 
-  const query = "UPDATE inquiry_lead_source SET name = ? WHERE id = ?";
-  db.query(query, [name, id], (err, result) => {
+  const query = "UPDATE inquiry_lead_source SET name = ?, allow_category_selection = ? WHERE id = ?";
+  db.query(query, [name, allow_category_selection ? 1 : 0, id], (err, result) => {
     if (err) return res.status(500).json(err);
     if (result.affectedRows === 0)
       return res.status(404).json({ message: "Record not found" });

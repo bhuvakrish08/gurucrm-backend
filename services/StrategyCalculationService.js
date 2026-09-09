@@ -168,24 +168,6 @@ async function getAuthoritativeWonDate(quotationId, databasePool = db, options =
   }
   if (!quotationId) throw new Error("quotationId is required for getAuthoritativeWonDate");
 
-  // Priority 1: Check existing contribution stability (unless forceDateReconciliation is requested)
-  if (!options.forceDateReconciliation) {
-    const [contribRows] = await promiseDb.query(
-      `SELECT won_date FROM strategy_quotation_contributions WHERE quotation_id = ? AND is_active = 1`,
-      [quotationId]
-    );
-    if (contribRows.length > 0 && contribRows[0].won_date) {
-      const dStr = typeof contribRows[0].won_date === "string" 
-        ? contribRows[0].won_date.split("T")[0] 
-        : contribRows[0].won_date.toISOString().split("T")[0];
-      return {
-        wonDate: dStr,
-        sourceType: "PERSISTED_CONTRIBUTION",
-        priority: 1
-      };
-    }
-  }
-
   // Fetch quotation and joined lead/project data
   const [qRows] = await promiseDb.query(
     `SELECT q.id, q.lead_id, q.quotation_date, q.created_at, l.won_at
@@ -199,7 +181,7 @@ async function getAuthoritativeWonDate(quotationId, databasePool = db, options =
   }
   const quotation = qRows[0];
 
-  // Priority 2: Explicit quotation.quotation_date (proposal/quotation date takes precedence for strategy period assignment)
+  // Priority 1: Authoritative quotation.quotation_date (proposal/quotation date takes primary precedence for strategy period assignment)
   if (quotation.quotation_date && quotation.quotation_date !== "0000-00-00" && quotation.quotation_date !== "") {
     const dStr = typeof quotation.quotation_date === "string"
       ? quotation.quotation_date.split(" ")[0].split("T")[0]
@@ -207,11 +189,11 @@ async function getAuthoritativeWonDate(quotationId, databasePool = db, options =
     return {
       wonDate: dStr,
       sourceType: "QUOTATION_DATE",
-      priority: 2
+      priority: 1
     };
   }
 
-  // Priority 3: Explicit lead.won_at
+  // Priority 2: Explicit lead.won_at
   if (quotation.won_at && quotation.won_at !== "0000-00-00 00:00:00") {
     const dStr = typeof quotation.won_at === "string"
       ? quotation.won_at.split(" ")[0].split("T")[0]
@@ -219,11 +201,11 @@ async function getAuthoritativeWonDate(quotationId, databasePool = db, options =
     return {
       wonDate: dStr,
       sourceType: "LEAD_WON_AT",
-      priority: 3
+      priority: 2
     };
   }
 
-  // Priority 4: Project creation timestamp from 'project' table
+  // Priority 3: Project creation timestamp from 'project' table
   const [projRows] = await promiseDb.query(
     `SELECT created_at FROM project WHERE quotation_id = ? ORDER BY id ASC LIMIT 1`,
     [quotationId]
@@ -235,6 +217,22 @@ async function getAuthoritativeWonDate(quotationId, databasePool = db, options =
     return {
       wonDate: dStr,
       sourceType: "PROJECT_CREATED_AT",
+      priority: 3
+    };
+  }
+
+  // Priority 4: Existing contribution stability
+  const [contribRows] = await promiseDb.query(
+    `SELECT won_date FROM strategy_quotation_contributions WHERE quotation_id = ? AND is_active = 1`,
+    [quotationId]
+  );
+  if (contribRows.length > 0 && contribRows[0].won_date) {
+    const dStr = typeof contribRows[0].won_date === "string" 
+      ? contribRows[0].won_date.split("T")[0] 
+      : contribRows[0].won_date.toISOString().split("T")[0];
+    return {
+      wonDate: dStr,
+      sourceType: "PERSISTED_CONTRIBUTION",
       priority: 4
     };
   }
@@ -329,6 +327,98 @@ async function getMappedCategoryBySource(sourceNameOrId, databasePool = db) {
   };
 }
 
+/**
+ * Resolves the Strategy Category for a given quotation using the strict hierarchy:
+ * 1. quotation.strategy_category_id (if explicitly set on quotation)
+ * 2. lead.strategy_category_id (Primary source of truth from originating lead)
+ * 3. Source Default Fallback (from strategy_source_mappings if lead category is NULL)
+ * 4. Unmapped (if both are NULL)
+ */
+async function resolveQuotationStrategyCategory(quotationId, databasePool = db) {
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+  if (!quotationId) throw new Error("quotationId is required for resolveQuotationStrategyCategory");
+
+  const [qRows] = await promiseDb.query(
+    `SELECT q.id, q.lead_id, q.source, q.strategy_category_id AS quotation_strategy_category_id,
+            l.source AS lead_source, l.strategy_category_id AS lead_strategy_category_id
+     FROM quotation q
+     LEFT JOIN \`lead\` l ON l.lead_id = q.lead_id
+     WHERE q.id = ?`,
+    [Number(quotationId)]
+  );
+
+  if (qRows.length === 0) {
+    return {
+      mapped: false,
+      strategyCategoryId: null,
+      sourceId: null,
+      sourceName: "",
+      resolutionType: "QUOTATION_NOT_FOUND",
+      reason: "QUOTATION_NOT_FOUND"
+    };
+  }
+
+  const quotation = qRows[0];
+  const effectiveStrategyCategoryId = quotation.quotation_strategy_category_id || quotation.lead_strategy_category_id;
+  const sourceInput = (quotation.source && String(quotation.source).trim() !== "")
+    ? quotation.source
+    : (quotation.lead_source || "");
+
+  // Priority 1: Direct Category from Lead or Quotation
+  if (effectiveStrategyCategoryId) {
+    const [catRows] = await promiseDb.query(
+      `SELECT id, name, code FROM strategy_source_categories WHERE id = ? AND is_active = 1`,
+      [effectiveStrategyCategoryId]
+    );
+    if (catRows.length > 0) {
+      let sourceId = null;
+      let sourceName = String(sourceInput || "");
+      if (sourceInput) {
+        const trimmedName = String(sourceInput).trim();
+        const [sRows] = await promiseDb.query(
+          `SELECT id, name FROM inquiry_lead_source WHERE id = ? OR name = ? LIMIT 1`,
+          [Number(sourceInput) || -1, trimmedName]
+        );
+        if (sRows.length > 0) {
+          sourceId = sRows[0].id;
+          sourceName = sRows[0].name;
+        }
+      }
+      return {
+        mapped: true,
+        sourceId,
+        sourceName,
+        strategyCategoryId: catRows[0].id,
+        strategyCategoryCode: catRows[0].code,
+        strategyCategoryName: catRows[0].name,
+        resolutionType: quotation.quotation_strategy_category_id ? "QUOTATION_LEVEL" : "LEAD_LEVEL"
+      };
+    }
+  }
+
+  // Priority 2: Fallback to Source Mapping Default Category
+  const fallback = await getMappedCategoryBySource(sourceInput, promiseDb);
+  if (fallback.mapped) {
+    return {
+      ...fallback,
+      resolutionType: "SOURCE_FALLBACK"
+    };
+  }
+
+  // Priority 3: Truly Unmapped
+  return {
+    mapped: false,
+    sourceId: fallback.sourceId || null,
+    sourceName: fallback.sourceName || String(sourceInput),
+    strategyCategoryId: null,
+    strategyCategoryCode: null,
+    strategyCategoryName: null,
+    resolutionType: "UNMAPPED",
+    reason: fallback.reason || "UNMAPPED"
+  };
+}
+
+
 /* ==========================================================================
  * 5. ACHIEVEMENT CONTRIBUTION READ LOGIC
  * ========================================================================== */
@@ -374,10 +464,10 @@ async function getCategoryQuarterAdjustments(financialYear, monthNumber, strateg
   let quarterExcessReduction = 0;
 
   for (const r of rows) {
-    if (r.adjustment_type === "QUARTER_SHORTFALL_ADDITION") {
-      quarterShortfallAddition = roundMoney(r.total_amount);
-    } else if (r.adjustment_type === "QUARTER_EXCESS_REDUCTION") {
-      quarterExcessReduction = roundMoney(r.total_amount);
+    if (r.adjustment_type === "QUARTER_SHORTFALL_ADDITION" || r.adjustment_type === "MONTH_CARRY_ADDITION") {
+      quarterShortfallAddition = roundMoney(quarterShortfallAddition + Number(r.total_amount));
+    } else if (r.adjustment_type === "QUARTER_EXCESS_REDUCTION" || r.adjustment_type === "MONTH_CARRY_REDUCTION") {
+      quarterExcessReduction = roundMoney(quarterExcessReduction + Number(r.total_amount));
     }
   }
 
@@ -454,11 +544,34 @@ async function calculateCategoryQuarterMonths(financialYear, quarterNumber, stra
   for (const a of adjRows) {
     const mNum = Number(a.destination_month);
     if (!adjMap[mNum]) adjMap[mNum] = { shortfallAdd: 0, excessRed: 0 };
-    if (a.adjustment_type === "QUARTER_SHORTFALL_ADDITION") {
-      adjMap[mNum].shortfallAdd = roundMoney(a.total_amount);
-    } else if (a.adjustment_type === "QUARTER_EXCESS_REDUCTION") {
-      adjMap[mNum].excessRed = roundMoney(a.total_amount);
+    if (a.adjustment_type === "QUARTER_SHORTFALL_ADDITION" || a.adjustment_type === "MONTH_CARRY_ADDITION") {
+      adjMap[mNum].shortfallAdd = roundMoney(adjMap[mNum].shortfallAdd + Number(a.total_amount));
+    } else if (a.adjustment_type === "QUARTER_EXCESS_REDUCTION" || a.adjustment_type === "MONTH_CARRY_REDUCTION") {
+      adjMap[mNum].excessRed = roundMoney(adjMap[mNum].excessRed + Number(a.total_amount));
     }
+  }
+
+  // Preload all month carry allocations out of this category by source month and carry type
+  const [monthAllocOutRows] = await promiseDb.query(
+    `SELECT source_month, carry_type, COALESCE(SUM(amount), 0) AS total_allocated
+     FROM strategy_month_carry_allocations
+     WHERE financial_year = ? AND strategy_category_id = ? AND status = 'CONFIRMED'
+     GROUP BY source_month, carry_type`,
+    [financialYear, catId]
+  );
+  const monthAllocOutMap = {};
+  for (const row of monthAllocOutRows) {
+    const sMonth = Number(row.source_month);
+    if (!monthAllocOutMap[sMonth]) {
+      monthAllocOutMap[sMonth] = { shortfall: 0, excess: 0, total: 0 };
+    }
+    const amt = roundMoney(row.total_allocated);
+    if (row.carry_type === "SHORTFALL") {
+      monthAllocOutMap[sMonth].shortfall = roundMoney(monthAllocOutMap[sMonth].shortfall + amt);
+    } else if (row.carry_type === "EXCESS") {
+      monthAllocOutMap[sMonth].excess = roundMoney(monthAllocOutMap[sMonth].excess + amt);
+    }
+    monthAllocOutMap[sMonth].total = roundMoney(monthAllocOutMap[sMonth].total + amt);
   }
 
   const results = [];
@@ -499,6 +612,21 @@ async function calculateCategoryQuarterMonths(financialYear, quarterNumber, stra
       closingShortfall = 0;
       closingExcess = roundMoney(unusedReductionCredit + currentNetPosition);
     }
+
+    const monthAllocOut = monthAllocOutMap[monthNumber] || { shortfall: 0, excess: 0, total: 0 };
+    const allocatedShortfallOut = roundMoney(monthAllocOut.shortfall);
+    const allocatedExcessOut = roundMoney(monthAllocOut.excess);
+    const allocatedOut = roundMoney(monthAllocOut.total);
+
+    let effectiveOutgoingShortfall = 0;
+    let effectiveOutgoingExcess = 0;
+    if (closingShortfall > 0) {
+      effectiveOutgoingShortfall = roundMoney(Math.max(0, closingShortfall - allocatedShortfallOut));
+    }
+    if (closingExcess > 0) {
+      effectiveOutgoingExcess = roundMoney(Math.max(0, closingExcess - allocatedExcessOut));
+    }
+    const effectiveCarryForward = closingShortfall > 0 ? effectiveOutgoingShortfall : effectiveOutgoingExcess;
 
     // Calculate achievement percentage
     let achievementPercentage = 0;
@@ -541,13 +669,19 @@ async function calculateCategoryQuarterMonths(financialYear, quarterNumber, stra
       variance,
       closingShortfall,
       closingExcess,
+      allocatedOut,
+      allocatedShortfallOut,
+      allocatedExcessOut,
+      effectiveOutgoingShortfall,
+      effectiveOutgoingExcess,
+      effectiveCarryForward,
       achievementPercentage,
       hasZeroGoalAchievement
     };
 
     results.push(monthResult);
-    prevClosingShortfall = closingShortfall;
-    prevClosingExcess = closingExcess;
+    prevClosingShortfall = effectiveOutgoingShortfall;
+    prevClosingExcess = effectiveOutgoingExcess;
   }
 
   return results;
@@ -589,7 +723,9 @@ async function getMonthStrategy(financialYear, monthNumber, databasePool = db) {
     totalAchievement: 0,
     totalContributionCount: 0,
     totalClosingShortfall: 0,
-    totalClosingExcess: 0
+    totalClosingExcess: 0,
+    totalAllocatedOut: 0,
+    totalEffectiveCarryForward: 0
   };
 
   for (const item of categoryResults) {
@@ -603,6 +739,8 @@ async function getMonthStrategy(financialYear, monthNumber, databasePool = db) {
     totals.totalContributionCount += item.contributionCount;
     totals.totalClosingShortfall = roundMoney(totals.totalClosingShortfall + item.closingShortfall);
     totals.totalClosingExcess = roundMoney(totals.totalClosingExcess + item.closingExcess);
+    totals.totalAllocatedOut = roundMoney(totals.totalAllocatedOut + item.allocatedOut);
+    totals.totalEffectiveCarryForward = roundMoney(totals.totalEffectiveCarryForward + item.effectiveCarryForward);
   }
 
   return {
@@ -652,14 +790,35 @@ async function getQuarterSummary(financialYear, quarterNumber, databasePool = db
     const monthsSequence = await calculateCategoryQuarterMonths(financialYear, qNum, cat.id, promiseDb);
     let quarterBaseGoal = 0;
     let quarterAchievement = 0;
-    let quarterShortfallAdditionTotal = 0;
-    let quarterExcessReductionTotal = 0;
 
     for (const mCalc of monthsSequence) {
       quarterBaseGoal = roundMoney(quarterBaseGoal + mCalc.baseGoal);
       quarterAchievement = roundMoney(quarterAchievement + mCalc.achievement);
-      quarterShortfallAdditionTotal = roundMoney(quarterShortfallAdditionTotal + (mCalc.quarterShortfallAddition || 0));
-      quarterExcessReductionTotal = roundMoney(quarterExcessReductionTotal + (mCalc.quarterExcessReduction || 0));
+    }
+
+    // Fetch valid inter-quarter adjustments affecting this quarter (excludes intra-quarter month-to-month movements)
+    const [extAdjRows] = await promiseDb.query(
+      `SELECT adjustment_type, COALESCE(SUM(amount), 0) AS total_amount
+       FROM strategy_adjustments
+       WHERE financial_year = ? AND destination_quarter = ? AND strategy_category_id = ? AND is_active = 1
+         AND (
+           adjustment_type IN ('QUARTER_SHORTFALL_ADDITION', 'QUARTER_EXCESS_REDUCTION')
+           OR (source_quarter IS NOT NULL AND source_quarter != destination_quarter)
+           OR (source_financial_year IS NOT NULL AND source_financial_year != destination_financial_year)
+         )
+       GROUP BY adjustment_type`,
+      [financialYear, qNum, cat.id]
+    );
+
+    let quarterShortfallAdditionTotal = 0;
+    let quarterExcessReductionTotal = 0;
+
+    for (const a of extAdjRows) {
+      if (a.adjustment_type === "QUARTER_SHORTFALL_ADDITION" || a.adjustment_type === "MONTH_CARRY_ADDITION") {
+        quarterShortfallAdditionTotal = roundMoney(quarterShortfallAdditionTotal + Number(a.total_amount));
+      } else if (a.adjustment_type === "QUARTER_EXCESS_REDUCTION" || a.adjustment_type === "MONTH_CARRY_REDUCTION") {
+        quarterExcessReductionTotal = roundMoney(quarterExcessReductionTotal + Number(a.total_amount));
+      }
     }
 
     const firstMonth = monthsSequence[0] || {};
@@ -687,6 +846,9 @@ async function getQuarterSummary(financialYear, quarterNumber, databasePool = db
       quarterBaseGoal,
       quarterEffectiveGoal,
       quarterAchievement,
+      quarterShortfallAddition: quarterShortfallAdditionTotal,
+      quarterExcessReduction: quarterExcessReductionTotal,
+      manualCarry: roundMoney(quarterShortfallAdditionTotal - quarterExcessReductionTotal),
       finalClosingShortfall,
       finalClosingExcess,
       monthsSequence
@@ -695,6 +857,9 @@ async function getQuarterSummary(financialYear, quarterNumber, databasePool = db
     totals.totalBaseGoal = roundMoney(totals.totalBaseGoal + quarterBaseGoal);
     totals.totalEffectiveGoal = roundMoney(totals.totalEffectiveGoal + quarterEffectiveGoal);
     totals.totalAchievement = roundMoney(totals.totalAchievement + quarterAchievement);
+    totals.totalShortfallAddition = roundMoney((totals.totalShortfallAddition || 0) + quarterShortfallAdditionTotal);
+    totals.totalExcessReduction = roundMoney((totals.totalExcessReduction || 0) + quarterExcessReductionTotal);
+    totals.totalManualCarry = roundMoney((totals.totalManualCarry || 0) + (quarterShortfallAdditionTotal - quarterExcessReductionTotal));
     totals.totalFinalClosingShortfall = roundMoney(totals.totalFinalClosingShortfall + finalClosingShortfall);
     totals.totalFinalClosingExcess = roundMoney(totals.totalFinalClosingExcess + finalClosingExcess);
   }
@@ -816,8 +981,10 @@ async function syncWonQuotationContribution(quotationId, options = {}) {
   // Step 1: Load quotation with Net Revenue calculation and joined lead source info
   const [qRows] = await promiseDb.query(
     `SELECT q.id, q.lead_id, q.quotation_no, q.quotation_status, q.source, q.amount, q.quotation_date,
+            q.strategy_category_id AS quotation_strategy_category_id,
             COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS net_revenue_amount,
-            l.source AS lead_source
+            l.source AS lead_source,
+            l.strategy_category_id AS lead_strategy_category_id
      FROM quotation q
      LEFT JOIN (
        SELECT quotation_id, SUM(amount_9) AS amount_9, SUM(amount_18) AS amount_18
@@ -842,13 +1009,10 @@ async function syncWonQuotationContribution(quotationId, options = {}) {
   // Step 3: Calculate Net Revenue Before GST
   const netRevenue = roundMoney(quotation.net_revenue_amount);
 
-  // Step 4: Resolve Source Mapping
-  // Priority: 1. quotation.source (exact snapshot text or ID), 2. lead.source fallback
-  const sourceInput = (quotation.source && String(quotation.source).trim() !== "")
-    ? quotation.source
-    : (quotation.lead_source || "");
+  // Step 4: Resolve Source & Strategy Category Mapping using unified resolver
+  const mappingInfo = await resolveQuotationStrategyCategory(qId, databasePool);
 
-  const mappingInfo = await getMappedCategoryBySource(sourceInput, databasePool);
+
   if (!mappingInfo.mapped) {
     // If an active contribution exists, deactivate it because source is unmapped / not found
     await removeQuotationContribution(qId, options);
@@ -1686,111 +1850,11 @@ function getNextQuarterContext(financialYear, quarterNumber) {
   };
 }
 
-/**
- * Returns complete quarter allocation context, source closing balances, current confirmed allocations, and stale state detection.
- */
-async function getQuarterAllocationData(financialYear, quarterNumber, databasePool = db) {
-  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
-  const qNum = Number(quarterNumber);
 
-  // 1. Get Source Quarter Closing Balance
-  const closingBalanceData = await getQuarterClosingBalance(financialYear, qNum, promiseDb);
-
-  // 2. Get Next Quarter Context
-  const nextQuarterContext = getNextQuarterContext(financialYear, qNum);
-
-  // 3. For each of the 5 categories, fetch current CONFIRMED allocation (if any) and check stale state
-  const targetMonthNumbers = nextQuarterContext.targetMonths.map(m => m.monthNumber);
-
-  const [allocRows] = await promiseDb.query(
-    `SELECT id, destination_month, strategy_category_id, allocation_type, amount, status, source_closing_amount
-     FROM strategy_quarter_allocations
-     WHERE source_financial_year = ? AND source_quarter = ? AND status = 'CONFIRMED'`,
-    [financialYear, qNum]
-  );
-
-  const allocMap = {};
-  for (const r of allocRows) {
-    const catId = Number(r.strategy_category_id);
-    if (!allocMap[catId]) {
-      allocMap[catId] = {
-        months: {},
-        allocatedTotal: 0,
-        sourceClosingSnapshot: roundMoney(r.source_closing_amount)
-      };
-    }
-    const mNum = Number(r.destination_month);
-    const amt = roundMoney(r.amount);
-    allocMap[catId].months[mNum] = amt;
-    allocMap[catId].allocatedTotal = roundMoney(allocMap[catId].allocatedTotal + amt);
-  }
-
-  const categories = [];
-  let anyStale = false;
-
-  for (const cat of closingBalanceData.categories) {
-    const catId = cat.categoryId;
-    const currentAlloc = allocMap[catId] || { months: {}, allocatedTotal: 0, sourceClosingSnapshot: null };
-
-    const currentAllocationMap = {};
-    for (const mNum of targetMonthNumbers) {
-      currentAllocationMap[mNum] = roundMoney(currentAlloc.months[mNum] || 0);
-    }
-
-    let allocationStatus = "NOT ALLOCATED";
-    if (cat.closingBalanceType === "BALANCED") {
-      allocationStatus = "NOT REQUIRED";
-    } else if (currentAlloc.sourceClosingSnapshot !== null) {
-      allocationStatus = "CONFIRMED";
-    }
-
-    let isStale = false;
-    if (allocationStatus === "CONFIRMED" && currentAlloc.sourceClosingSnapshot !== null) {
-      if (Math.abs(cat.closingBalanceAmount - currentAlloc.sourceClosingSnapshot) > 0.009) {
-        isStale = true;
-        allocationStatus = "STALE";
-        anyStale = true;
-      }
-    }
-
-    const remainingAmount = roundMoney(cat.closingBalanceAmount - currentAlloc.allocatedTotal);
-
-    categories.push({
-      categoryId: cat.categoryId,
-      categoryCode: cat.categoryCode,
-      categoryName: cat.categoryName,
-      icon_svg: cat.icon_svg,
-      icon_background: cat.icon_background,
-      icon_color: cat.icon_color,
-      badge_background: cat.badge_background,
-      badge_text_color: cat.badge_text_color,
-      closingBalanceType: cat.closingBalanceType,
-      closingBalanceAmount: cat.closingBalanceAmount,
-      currentAllocation: currentAllocationMap,
-      allocatedTotal: currentAlloc.allocatedTotal,
-      remainingAmount,
-      allocationStatus,
-      isStale,
-      previousClosingSnapshot: currentAlloc.sourceClosingSnapshot !== null ? currentAlloc.sourceClosingSnapshot : cat.closingBalanceAmount
-    });
-  }
-
-  return {
-    sourceFinancialYear: financialYear,
-    sourceQuarterNumber: qNum,
-    sourceQuarterLabel: `Q${qNum}`,
-    closingMonthNumber: closingBalanceData.closingMonthNumber,
-    closingMonthName: closingBalanceData.closingMonth,
-    targetFinancialYear: nextQuarterContext.targetFinancialYear,
-    targetQuarterNumber: nextQuarterContext.targetQuarterNumber,
-    targetMonths: nextQuarterContext.targetMonths,
-    categories,
-    isStale: anyStale
-  };
-}
 
 /**
- * Transactionally confirms or replaces a Quarter Allocation plan across target months,
+ * Transactionally saves incremental Quarter Allocation plan across target months,
+ * validating against remaining available balance (closingBalance - alreadyAllocated),
  * synchronizing strategy_adjustments and generating full audit history.
  */
 async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber, reason, performedBy, allocations }, options = {}) {
@@ -1840,7 +1904,6 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
 
   const conn = await promiseDb.getConnection();
   let createdCount = 0;
-  let replacedCount = 0;
   let unchangedCount = 0;
 
   try {
@@ -1882,14 +1945,39 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
         }
       }
 
+      // 1. Check existing confirmed month carry allocations originating from the closing month of this quarter
+      const [existingMonthAllocs] = await conn.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total_month_allocated
+         FROM strategy_month_carry_allocations
+         WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND status = 'CONFIRMED'`,
+        [sourceFinancialYear, closingBalanceData.closingMonthNumber, catId]
+      );
+      const existingMonthAllocated = roundMoney(existingMonthAllocs[0]?.total_month_allocated || 0);
+
+      // 2. Check existing confirmed quarter allocations
+      const [existingQuarterAllocs] = await conn.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total_quarter_allocated
+         FROM strategy_quarter_allocations
+         WHERE source_financial_year = ? AND source_quarter = ? AND strategy_category_id = ? AND status = 'CONFIRMED'`,
+        [sourceFinancialYear, qNum, catId]
+      );
+      const existingQuarterAllocated = roundMoney(existingQuarterAllocs[0]?.total_quarter_allocated || 0);
+      const alreadyAllocated = roundMoney(existingMonthAllocated + existingQuarterAllocated);
+      const availableAmount = Math.max(0, roundMoney(catClosing.closingBalanceAmount - alreadyAllocated));
+
       if (catClosing.closingBalanceType === "BALANCED") {
         if (totalAllocated > 0) {
           throw new Error(`Category '${catMap[catId].name}' is BALANCED (₹0.00 closing balance). Cannot allocate ₹${totalAllocated}. Allocation must be 0.`);
         }
       } else {
-        if (Math.abs(totalAllocated - catClosing.closingBalanceAmount) > 0.009) {
-          throw new Error(`Allocation mismatch for Category '${catMap[catId].name}': Total allocated (₹${totalAllocated}) must exactly equal the closing ${catClosing.closingBalanceType.toLowerCase()} balance (₹${catClosing.closingBalanceAmount}).`);
+        if (totalAllocated > availableAmount + 0.009) {
+          throw new Error(`Over-allocation for Category '${catMap[catId].name}': Total new allocation (₹${totalAllocated}) exceeds available balance (₹${availableAmount}). Already allocated: ₹${alreadyAllocated} of ₹${catClosing.closingBalanceAmount}.`);
         }
+      }
+
+      if (totalAllocated === 0) {
+        unchangedCount++;
+        continue;
       }
 
       const allocationType = catClosing.closingBalanceType;
@@ -1900,60 +1988,9 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
         adjustmentType = "QUARTER_EXCESS_REDUCTION";
       }
 
-      const [existingAlloc] = await conn.query(
-        `SELECT id, destination_month, amount, source_closing_amount
-         FROM strategy_quarter_allocations
-         WHERE source_financial_year = ? AND source_quarter = ? AND strategy_category_id = ? AND status = 'CONFIRMED'
-         FOR UPDATE`,
-        [sourceFinancialYear, qNum, catId]
-      );
-
-      let isIdentical = false;
-      let existingIds = [];
-      let oldAllocSummary = {};
-      let oldSnapshot = null;
-
-      if (existingAlloc.length > 0) {
-        existingIds = existingAlloc.map(r => r.id);
-        oldSnapshot = existingAlloc[0].source_closing_amount;
-        let identicalCount = 0;
-        for (const r of existingAlloc) {
-          const mNum = Number(r.destination_month);
-          const amt = roundMoney(r.amount);
-          oldAllocSummary[mNum] = amt;
-          if (monthAllocations[mNum] === amt) {
-            identicalCount++;
-          }
-        }
-        if (existingAlloc.length === validTargetMonths.length && identicalCount === validTargetMonths.length && Math.abs((oldSnapshot || 0) - catClosing.closingBalanceAmount) <= 0.009) {
-          isIdentical = true;
-        }
-      }
-
-      if (isIdentical) {
-        unchangedCount++;
-        continue;
-      }
-
-      if (existingIds.length > 0) {
-        await conn.query(
-          `UPDATE strategy_quarter_allocations SET status = 'SUPERSEDED'
-           WHERE id IN (${existingIds.map(() => "?").join(",")})`,
-          existingIds
-        );
-
-        await conn.query(
-          `UPDATE strategy_adjustments SET is_active = 0
-           WHERE reference_type = 'QUARTER_ALLOCATION' AND reference_id IN (${existingIds.map(() => "?").join(",")})`,
-          existingIds
-        );
-        replacedCount++;
-      } else if (totalAllocated > 0 || allocationType !== "BALANCED") {
-        createdCount++;
-      }
-
       for (const targetMonthNum of validTargetMonths) {
         const allocAmt = monthAllocations[targetMonthNum];
+        if (allocAmt <= 0) continue;
         
         const [insRes] = await conn.query(
           `INSERT INTO strategy_quarter_allocations (
@@ -1967,7 +2004,7 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
         );
         const newAllocId = insRes.insertId;
 
-        if (allocAmt > 0 && adjustmentType) {
+        if (adjustmentType) {
           await conn.query(
             `INSERT INTO strategy_adjustments (
               financial_year, source_financial_year, destination_financial_year,
@@ -1985,7 +2022,6 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
         }
       }
 
-      const actionType = existingIds.length > 0 ? "QUARTER_ALLOCATION_REPLACED" : "QUARTER_ALLOCATION_CREATED";
       await conn.query(
         `INSERT INTO strategy_goal_audit_logs (
           entity_type, entity_id, financial_year, quarter_number, strategy_category_id,
@@ -1997,40 +2033,120 @@ async function allocateQuarterBalance({ sourceFinancialYear, sourceQuarterNumber
           sourceFinancialYear,
           qNum,
           catId,
-          actionType,
-          existingIds.length > 0 ? JSON.stringify(oldAllocSummary) : "{}",
-          JSON.stringify(monthAllocations),
+          "QUARTER_ALLOCATION_CREATED",
+          String(alreadyAllocated),
+          String(roundMoney(alreadyAllocated + totalAllocated)),
           JSON.stringify({
             categoryName: catMap[catId].name,
             allocationType,
             sourceClosingAmount: catClosing.closingBalanceAmount,
+            alreadyAllocated,
+            newAllocation: totalAllocated,
             targetFinancialYear,
             targetQuarterNumber,
+            monthAllocations,
             reason: reason || "Quarter Closing Allocation"
           }),
           reason || "Quarter Closing Allocation",
           performedBy || "System"
         ]
       );
+      createdCount++;
     }
 
     if (typeof conn.commit === "function") await conn.commit();
 
-    let action = "CREATED";
-    if (replacedCount > 0 && createdCount === 0 && unchangedCount === 0) action = "REPLACED";
-    if (unchangedCount === allocations.length) action = "UNCHANGED";
-    else if (replacedCount > 0 || createdCount > 0) action = replacedCount > 0 ? "REPLACED" : "CREATED";
-
     return {
       success: true,
-      action,
+      action: createdCount > 0 ? "CREATED" : "UNCHANGED",
       created: createdCount,
-      replaced: replacedCount,
       unchanged: unchangedCount,
       sourceFinancialYear,
       sourceQuarterNumber: qNum,
       targetFinancialYear,
       targetQuarterNumber
+    };
+  } catch (txErr) {
+    if (typeof conn.rollback === "function") await conn.rollback();
+    throw txErr;
+  } finally {
+    if (typeof conn.release === "function") conn.release();
+  }
+}
+
+/**
+ * Transactionally resets / clears all confirmed Quarter Allocations for a source quarter.
+ */
+async function resetQuarterAllocations({ sourceFinancialYear, sourceQuarterNumber, reason, performedBy }, options = {}) {
+  const databasePool = options.connection || options.databasePool || db;
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+
+  validateFinancialYearFormat(sourceFinancialYear);
+  const qNum = Number(sourceQuarterNumber);
+  if (qNum < 1 || qNum > 4 || isNaN(qNum)) {
+    throw new Error("sourceQuarterNumber must be between 1 and 4");
+  }
+
+  const conn = await promiseDb.getConnection();
+  try {
+    if (typeof conn.beginTransaction === "function") await conn.beginTransaction();
+
+    const [existingAllocs] = await conn.query(
+      `SELECT id, strategy_category_id, destination_month, amount
+       FROM strategy_quarter_allocations
+       WHERE source_financial_year = ? AND source_quarter = ? AND status = 'CONFIRMED'
+       FOR UPDATE`,
+      [sourceFinancialYear, qNum]
+    );
+
+    if (existingAllocs.length === 0) {
+      if (typeof conn.commit === "function") await conn.commit();
+      return { success: true, message: "No active quarter allocations found to reset.", resetCount: 0 };
+    }
+
+    await conn.query(
+      `UPDATE strategy_quarter_allocations SET status = 'SUPERSEDED'
+       WHERE source_financial_year = ? AND source_quarter = ? AND status = 'CONFIRMED'`,
+      [sourceFinancialYear, qNum]
+    );
+
+    await conn.query(
+      `UPDATE strategy_adjustments SET is_active = 0
+       WHERE source_financial_year = ? AND source_quarter = ? AND reference_type = 'QUARTER_ALLOCATION' AND is_active = 1`,
+      [sourceFinancialYear, qNum]
+    );
+
+    await conn.query(
+      `INSERT INTO strategy_goal_audit_logs (
+        entity_type, entity_id, financial_year, quarter_number, action_type, old_value, new_value, metadata_json, reason, performed_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "QUARTER_ALLOCATION",
+        0,
+        sourceFinancialYear,
+        qNum,
+        "QUARTER_ALLOCATIONS_RESET",
+        JSON.stringify(existingAllocs),
+        "[]",
+        JSON.stringify({
+          sourceFinancialYear,
+          sourceQuarterNumber: qNum,
+          resetAllocationsCount: existingAllocs.length,
+          reason: reason || "Quarter allocations reset"
+        }),
+        reason || "Quarter allocations reset",
+        performedBy || "System"
+      ]
+    );
+
+    if (typeof conn.commit === "function") await conn.commit();
+
+    return {
+      success: true,
+      message: `Successfully reset ${existingAllocs.length} quarter allocation records.`,
+      resetCount: existingAllocs.length,
+      sourceFinancialYear,
+      sourceQuarterNumber: qNum
     };
   } catch (txErr) {
     if (typeof conn.rollback === "function") await conn.rollback();
@@ -2131,6 +2247,12 @@ async function getStrategyOverview(financialYear, options = {}, databasePool = d
         closingExcess,
         closingBalanceType,
         closingBalanceAmount,
+        allocatedOut: c.allocatedOut || 0,
+        allocatedShortfallOut: c.allocatedShortfallOut || 0,
+        allocatedExcessOut: c.allocatedExcessOut || 0,
+        effectiveOutgoingShortfall: c.effectiveOutgoingShortfall || 0,
+        effectiveOutgoingExcess: c.effectiveOutgoingExcess || 0,
+        effectiveCarryForward: c.effectiveCarryForward || 0,
         contributionCount: c.contributionCount,
         allocationStatus: qAlloc?.allocationStatus || "NOT_REQUIRED",
         isAllocationStale: Boolean(qAlloc?.isStale),
@@ -2155,6 +2277,8 @@ async function getStrategyOverview(financialYear, options = {}, databasePool = d
       const quarterShortfallAddition = roundMoney(c.monthsSequence.reduce((s, m) => s + (m.quarterShortfallAddition || 0), 0));
       const quarterExcessReduction = roundMoney(c.monthsSequence.reduce((s, m) => s + (m.quarterExcessReduction || 0), 0));
       const contributionCount = c.monthsSequence.reduce((s, m) => s + (m.contributionCount || 0), 0);
+
+      const finalMonth = c.monthsSequence[c.monthsSequence.length - 1] || {};
 
       const variance = roundMoney(c.quarterAchievement - c.quarterEffectiveGoal);
       let achievementPercentage = 0;
@@ -2196,6 +2320,12 @@ async function getStrategyOverview(financialYear, options = {}, databasePool = d
         closingExcess,
         closingBalanceType,
         closingBalanceAmount,
+        allocatedOut: finalMonth.allocatedOut || 0,
+        allocatedShortfallOut: finalMonth.allocatedShortfallOut || 0,
+        allocatedExcessOut: finalMonth.allocatedExcessOut || 0,
+        effectiveOutgoingShortfall: finalMonth.effectiveOutgoingShortfall || 0,
+        effectiveOutgoingExcess: finalMonth.effectiveOutgoingExcess || 0,
+        effectiveCarryForward: finalMonth.effectiveCarryForward || 0,
         contributionCount,
         allocationStatus: qAlloc?.allocationStatus || "NOT_REQUIRED",
         isAllocationStale: Boolean(qAlloc?.isStale),
@@ -2695,7 +2825,619 @@ async function getStrategyHistory(options = {}, databasePool = db) {
   };
 }
 
+
+/* ==========================================================================
+ * 15. MONTH CARRY ALLOCATION ENGINE (LEVEL 1)
+ * ========================================================================== */
+
+/**
+ * Returns complete quarter allocation context, source closing balances, current confirmed allocations, and stale state detection.
+ */
+async function getQuarterAllocationData(financialYear, quarterNumber, databasePool = db) {
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+  const qNum = Number(quarterNumber);
+
+  // 1. Get Source Quarter Closing Balance
+  const closingBalanceData = await getQuarterClosingBalance(financialYear, qNum, promiseDb);
+
+  // 2. Get Next Quarter Context
+  const nextQuarterContext = getNextQuarterContext(financialYear, qNum);
+  const targetMonthNumbers = nextQuarterContext.targetMonths.map(m => m.monthNumber);
+
+  // Source quarter month numbers (e.g. [4, 5, 6] for Q1, [7, 8, 9] for Q2, etc.)
+  const sourceQuarterMonthsMeta = ALL_MONTHS_METADATA.filter(m => m.quarterNumber === qNum);
+  const sourceQuarterMonthNumbers = sourceQuarterMonthsMeta.map(m => m.monthNumber);
+
+  // 3. For each of the 5 categories, fetch current CONFIRMED quarter allocation
+  const [allocRows] = await promiseDb.query(
+    `SELECT id, destination_month, strategy_category_id, allocation_type, amount, status, source_closing_amount
+     FROM strategy_quarter_allocations
+     WHERE source_financial_year = ? AND source_quarter = ? AND status = 'CONFIRMED'`,
+    [financialYear, qNum]
+  );
+
+  // 4. Fetch current CONFIRMED month carry allocations originating from the closing month of this source quarter
+  const [monthAllocRows] = await promiseDb.query(
+    `SELECT id, destination_month, strategy_category_id, carry_type, amount, status, source_closing_snapshot
+     FROM strategy_month_carry_allocations
+     WHERE financial_year = ? AND source_month = ? AND status = 'CONFIRMED'`,
+    [financialYear, closingBalanceData.closingMonthNumber]
+  );
+
+  const monthAllocMap = {};
+  for (const r of monthAllocRows) {
+    const catId = Number(r.strategy_category_id);
+    if (!monthAllocMap[catId]) {
+      monthAllocMap[catId] = {
+        months: {},
+        allocatedTotal: 0
+      };
+    }
+    const mNum = Number(r.destination_month);
+    const amt = roundMoney(r.amount);
+    monthAllocMap[catId].months[mNum] = roundMoney((monthAllocMap[catId].months[mNum] || 0) + amt);
+    monthAllocMap[catId].allocatedTotal = roundMoney(monthAllocMap[catId].allocatedTotal + amt);
+  }
+
+  const quarterAllocMap = {};
+  for (const r of allocRows) {
+    const catId = Number(r.strategy_category_id);
+    if (!quarterAllocMap[catId]) {
+      quarterAllocMap[catId] = {
+        months: {},
+        allocatedTotal: 0,
+        sourceClosingSnapshot: roundMoney(r.source_closing_amount)
+      };
+    }
+    const mNum = Number(r.destination_month);
+    const amt = roundMoney(r.amount);
+    quarterAllocMap[catId].months[mNum] = roundMoney((quarterAllocMap[catId].months[mNum] || 0) + amt);
+    quarterAllocMap[catId].allocatedTotal = roundMoney(quarterAllocMap[catId].allocatedTotal + amt);
+  }
+
+  const categories = [];
+  let anyStale = false;
+
+  for (const cat of closingBalanceData.categories) {
+    const catId = cat.categoryId;
+    const catClosingAmount = roundMoney(cat.closingBalanceAmount || 0);
+    const currentQuarterAlloc = quarterAllocMap[catId] || { months: {}, allocatedTotal: 0, sourceClosingSnapshot: null };
+    const currentMonthAlloc = monthAllocMap[catId] || { months: {}, allocatedTotal: 0 };
+
+    const existingMonthAllocated = roundMoney(currentMonthAlloc.allocatedTotal);
+    const savedQuarterAllocated = roundMoney(currentQuarterAlloc.allocatedTotal);
+    const totalAlreadyAllocated = roundMoney(existingMonthAllocated + savedQuarterAllocated);
+
+    let isStale = false;
+    if (currentQuarterAlloc.sourceClosingSnapshot !== null && (savedQuarterAllocated > 0 || cat.closingBalanceType !== "BALANCED")) {
+      if (Math.abs(catClosingAmount - currentQuarterAlloc.sourceClosingSnapshot) > 0.009) {
+        isStale = true;
+        anyStale = true;
+      }
+    }
+
+    let existingAllocatedAmount = 0;
+    let availableAmount = 0;
+    let allocationStatus = "NOT ALLOCATED";
+
+    if (cat.closingBalanceType === "BALANCED" || catClosingAmount === 0) {
+      existingAllocatedAmount = 0;
+      availableAmount = 0;
+      allocationStatus = "NOT REQUIRED";
+    } else if (isStale) {
+      existingAllocatedAmount = totalAlreadyAllocated;
+      availableAmount = Math.max(0, roundMoney(catClosingAmount - totalAlreadyAllocated));
+      allocationStatus = "STALE";
+    } else if (totalAlreadyAllocated > 0) {
+      existingAllocatedAmount = totalAlreadyAllocated;
+      availableAmount = Math.max(0, roundMoney(catClosingAmount - existingAllocatedAmount));
+      allocationStatus = "CONFIRMED";
+    } else {
+      existingAllocatedAmount = 0;
+      availableAmount = catClosingAmount;
+      allocationStatus = "NOT ALLOCATED";
+    }
+
+    const currentAllocationMap = {};
+    const existingMonthAllocationsMap = {};
+    for (const mNum of targetMonthNumbers) {
+      currentAllocationMap[mNum] = 0;
+      existingMonthAllocationsMap[mNum] = roundMoney((currentMonthAlloc.months[mNum] || 0) + (currentQuarterAlloc.months[mNum] || 0));
+    }
+
+    categories.push({
+      categoryId: cat.categoryId,
+      categoryCode: cat.categoryCode,
+      categoryName: cat.categoryName,
+      icon_svg: cat.icon_svg,
+      icon_background: cat.icon_background,
+      icon_color: cat.icon_color,
+      badge_background: cat.badge_background,
+      badge_text_color: cat.badge_text_color,
+      closingBalanceType: cat.closingBalanceType,
+      closingBalanceAmount: catClosingAmount,
+      existingAllocatedAmount,
+      existingMonthAllocations: existingMonthAllocationsMap,
+      availableAmount,
+      currentAllocation: currentAllocationMap,
+      allocatedTotal: existingAllocatedAmount,
+      remainingAmount: availableAmount,
+      allocationStatus,
+      isStale,
+      previousClosingSnapshot: currentQuarterAlloc.sourceClosingSnapshot !== null ? currentQuarterAlloc.sourceClosingSnapshot : catClosingAmount
+    });
+  }
+
+  return {
+    sourceFinancialYear: financialYear,
+    sourceQuarterNumber: qNum,
+    sourceQuarterLabel: `Q${qNum}`,
+    closingMonthNumber: closingBalanceData.closingMonthNumber,
+    closingMonthName: closingBalanceData.closingMonth,
+    targetFinancialYear: nextQuarterContext.targetFinancialYear,
+    targetQuarterNumber: nextQuarterContext.targetQuarterNumber,
+    targetMonths: nextQuarterContext.targetMonths,
+    categories,
+    isStale: anyStale
+  };
+}
+
+/**
+ * Returns month carry allocation data for a source month
+ */
+async function getMonthCarryAllocationData(financialYear, monthNumber, databasePool = db) {
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+  const mNum = Number(monthNumber);
+
+  // Get the month strategy to find the source closing balances
+  const monthStrategy = await getMonthStrategy(financialYear, mNum, promiseDb);
+  
+  const [allocRows] = await promiseDb.query(
+    `SELECT id, strategy_category_id, destination_month, amount, status, source_closing_snapshot, carry_type
+     FROM strategy_month_carry_allocations
+     WHERE financial_year = ? AND source_month = ? AND status = 'CONFIRMED'`,
+    [financialYear, mNum]
+  );
+  
+  const allocMap = {};
+  for (const r of allocRows) {
+    const catId = Number(r.strategy_category_id);
+    if (!allocMap[catId]) {
+      allocMap[catId] = {
+        months: {},
+        allocatedTotal: 0,
+        sourceClosingSnapshot: roundMoney(r.source_closing_snapshot),
+        carryType: r.carry_type
+      };
+    }
+    const dNum = Number(r.destination_month);
+    const amt = roundMoney(r.amount);
+    allocMap[catId].months[dNum] = amt;
+    allocMap[catId].allocatedTotal = roundMoney(allocMap[catId].allocatedTotal + amt);
+  }
+
+  const categories = [];
+  let anyStale = false;
+  
+  for (const cat of monthStrategy.categories) {
+    const catId = cat.strategyCategoryId;
+    const currentAlloc = allocMap[catId] || { months: {}, allocatedTotal: 0, sourceClosingSnapshot: null };
+    
+    // We only care about categories with closingShortfall or closingExcess
+    let closingBalanceAmount = 0;
+    let closingBalanceType = "BALANCED";
+    if (cat.closingShortfall > 0) {
+      closingBalanceAmount = roundMoney(cat.closingShortfall);
+      closingBalanceType = "SHORTFALL";
+    } else if (cat.closingExcess > 0) {
+      closingBalanceAmount = roundMoney(cat.closingExcess);
+      closingBalanceType = "EXCESS";
+    }
+
+    const existingAllocatedAmount = currentAlloc.allocatedTotal;
+    const availableAmount = Math.max(0, roundMoney(closingBalanceAmount - existingAllocatedAmount));
+
+    let allocationStatus = "NOT ALLOCATED";
+    if (closingBalanceType === "BALANCED") {
+      allocationStatus = "NOT REQUIRED";
+    } else if (currentAlloc.sourceClosingSnapshot !== null) {
+      allocationStatus = "CONFIRMED";
+    }
+    
+    let isStale = false;
+    if (allocationStatus === "CONFIRMED" && currentAlloc.sourceClosingSnapshot !== null) {
+      if (Math.abs(closingBalanceAmount - currentAlloc.sourceClosingSnapshot) > 0.009) {
+        isStale = true;
+        allocationStatus = "STALE";
+        anyStale = true;
+      }
+    }
+    
+    const remainingAmount = roundMoney(availableAmount - currentAlloc.allocatedTotal);
+    
+    // Determine valid target months: next month to March
+    const validTargetMonths = [];
+    if (cat.financialYearMonthOrder < 12) {
+      for (let i = cat.financialYearMonthOrder + 1; i <= 12; i++) {
+        validTargetMonths.push(getCalendarMonthFromFinancialYearOrder(i));
+      }
+    }
+    
+    categories.push({
+      categoryId: cat.strategyCategoryId,
+      categoryCode: cat.categoryCode,
+      categoryName: cat.categoryName,
+      icon_svg: cat.icon_svg,
+      icon_background: cat.icon_background,
+      icon_color: cat.icon_color,
+      badge_background: cat.badge_background,
+      badge_text_color: cat.badge_text_color,
+      closingBalanceType,
+      closingBalanceAmount,
+      existingAllocatedAmount,
+      availableAmount,
+      currentAllocation: currentAlloc.months,
+      allocatedTotal: currentAlloc.allocatedTotal,
+      remainingAmount,
+      allocationStatus,
+      isStale,
+      previousClosingSnapshot: currentAlloc.sourceClosingSnapshot !== null ? currentAlloc.sourceClosingSnapshot : closingBalanceAmount,
+      validTargetMonths
+    });
+  }
+  
+  return {
+    sourceFinancialYear: financialYear,
+    sourceMonthNumber: mNum,
+    sourceMonthName: monthStrategy.monthName,
+    categories,
+    isStale: anyStale
+  };
+}
+
+/**
+ * Transactionally confirms or replaces a Month Carry Allocation
+ */
+async function allocateMonthCarryBalance({ sourceFinancialYear, sourceMonth, reason, performedBy, allocations }, options = {}) {
+  const databasePool = options.connection || options.databasePool || db;
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+  
+  validateFinancialYearFormat(sourceFinancialYear);
+  const mNum = Number(sourceMonth);
+  if (isNaN(mNum) || mNum < 1 || mNum > 12) {
+    throw new Error("sourceMonth must be between 1 and 12");
+  }
+  
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    throw new Error("allocations must be a non-empty array");
+  }
+  
+  const sourceMonthOrder = getFinancialYearMonthOrder(mNum);
+  if (sourceMonthOrder === 12) {
+    throw new Error("March has no future month in the same financial year to carry forward to");
+  }
+  
+  const validTargetMonths = [];
+  for (let i = sourceMonthOrder + 1; i <= 12; i++) {
+    validTargetMonths.push(getCalendarMonthFromFinancialYearOrder(i));
+  }
+  
+  const seenCatIds = new Set();
+  for (const alloc of allocations) {
+    const catId = Number(alloc.strategyCategoryId);
+    if (!catId || isNaN(catId)) {
+      throw new Error("Each allocation item must have a valid numeric strategyCategoryId");
+    }
+    if (seenCatIds.has(catId)) {
+      throw new Error(`Duplicate strategyCategoryId in allocation request: ${catId}`);
+    }
+    seenCatIds.add(catId);
+  }
+  
+  const [catRows] = await promiseDb.query(
+    `SELECT id, name FROM strategy_source_categories WHERE is_active = 1`
+  );
+  const validCatIds = new Set(catRows.map(c => Number(c.id)));
+  const catMap = {};
+  for (const c of catRows) catMap[Number(c.id)] = c;
+  
+  for (const catId of seenCatIds) {
+    if (!validCatIds.has(catId)) {
+      throw new Error(`Invalid or inactive Strategy Category ID: ${catId}`);
+    }
+  }
+  
+  const conn = await promiseDb.getConnection();
+  let createdCount = 0;
+  let replacedCount = 0;
+  let unchangedCount = 0;
+  
+  try {
+    if (typeof conn.beginTransaction === "function") await conn.beginTransaction();
+    
+    const monthStrategy = await getMonthStrategy(sourceFinancialYear, mNum, conn);
+    const closingCatMap = {};
+    for (const c of monthStrategy.categories) {
+      closingCatMap[c.strategyCategoryId] = c;
+    }
+    
+    for (const alloc of allocations) {
+      const catId = Number(alloc.strategyCategoryId);
+      const catClosing = closingCatMap[catId];
+      if (!catClosing) {
+        throw new Error(`Closing balance not found for Category ID ${catId}`);
+      }
+      
+      let closingBalanceAmount = 0;
+      let closingBalanceType = "BALANCED";
+      if (catClosing.closingShortfall > 0) {
+        closingBalanceAmount = catClosing.closingShortfall;
+        closingBalanceType = "SHORTFALL";
+      } else if (catClosing.closingExcess > 0) {
+        closingBalanceAmount = catClosing.closingExcess;
+        closingBalanceType = "EXCESS";
+      }
+      
+      const monthsPayload = alloc.months || {};
+      let totalAllocated = 0;
+      const monthAllocations = {};
+      
+      for (const k of Object.keys(monthsPayload)) {
+        const targetMonthNum = Number(k);
+        if (!validTargetMonths.includes(targetMonthNum)) {
+          throw new Error(`Invalid target month ${targetMonthNum} for source month ${mNum}`);
+        }
+        let amtVal = Number(monthsPayload[k]);
+        if (isNaN(amtVal) || !isFinite(amtVal) || amtVal < 0) {
+          throw new Error(`Allocation amount for Month ${targetMonthNum} must be a non-negative finite number.`);
+        }
+        amtVal = roundMoney(amtVal);
+        if (amtVal > 0) {
+          monthAllocations[targetMonthNum] = amtVal;
+          totalAllocated = roundMoney(totalAllocated + amtVal);
+        }
+      }
+      
+      if (closingBalanceType === "BALANCED" && totalAllocated > 0) {
+        throw new Error(`Category '${catMap[catId].name}' is BALANCED. Cannot allocate ${totalAllocated}.`);
+      }
+      
+      if (totalAllocated > closingBalanceAmount) {
+        throw new Error(`Over-allocation for Category '${catMap[catId].name}': Total allocated (${totalAllocated}) exceeds closing balance (${closingBalanceAmount}).`);
+      }
+      
+      const allocationType = closingBalanceType;
+      let adjustmentType = null;
+      if (allocationType === "SHORTFALL") {
+        adjustmentType = "MONTH_CARRY_ADDITION";
+      } else if (allocationType === "EXCESS") {
+        adjustmentType = "MONTH_CARRY_REDUCTION";
+      }
+      
+      const [existingAlloc] = await conn.query(
+        `SELECT id, destination_month, amount, source_closing_snapshot
+         FROM strategy_month_carry_allocations
+         WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND status = 'CONFIRMED'
+         FOR UPDATE`,
+        [sourceFinancialYear, mNum, catId]
+      );
+      
+      let isIdentical = false;
+      let existingIds = [];
+      let oldAllocSummary = {};
+      
+      if (existingAlloc.length > 0) {
+        existingIds = existingAlloc.map(r => r.id);
+        const oldSnapshot = existingAlloc[0].source_closing_snapshot;
+        let identicalCount = 0;
+        let oldTotalCount = 0;
+        for (const r of existingAlloc) {
+          const tNum = Number(r.destination_month);
+          const amt = roundMoney(r.amount);
+          oldAllocSummary[tNum] = amt;
+          if (amt > 0) oldTotalCount++;
+          if (monthAllocations[tNum] === amt) {
+            identicalCount++;
+          }
+        }
+        const newTotalCount = Object.keys(monthAllocations).length;
+        if (oldTotalCount === newTotalCount && identicalCount === newTotalCount && Math.abs((oldSnapshot || 0) - closingBalanceAmount) <= 0.009) {
+          isIdentical = true;
+        }
+      }
+      
+      if (isIdentical) {
+        unchangedCount++;
+        continue;
+      }
+      
+      if (existingIds.length > 0) {
+        await conn.query(
+          `UPDATE strategy_month_carry_allocations SET status = 'SUPERSEDED'
+           WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND status = 'CONFIRMED'`,
+          [sourceFinancialYear, mNum, catId]
+        );
+        
+        await conn.query(
+          `UPDATE strategy_adjustments SET is_active = 0
+           WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND reference_type = 'MONTH_CARRY_ALLOCATION' AND is_active = 1`,
+          [sourceFinancialYear, mNum, catId]
+        );
+        replacedCount++;
+      } else if (totalAllocated > 0) {
+        // Also ensure any orphaned active adjustment rows for this source month and category are cleared before inserting new ones
+        await conn.query(
+          `UPDATE strategy_adjustments SET is_active = 0
+           WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND reference_type = 'MONTH_CARRY_ALLOCATION' AND is_active = 1`,
+          [sourceFinancialYear, mNum, catId]
+        );
+        createdCount++;
+      }
+      
+      for (const targetMonthNum of Object.keys(monthAllocations)) {
+        const allocAmt = monthAllocations[targetMonthNum];
+        const destinationFY = sourceFinancialYear;
+        
+        const [insRes] = await conn.query(
+          `INSERT INTO strategy_month_carry_allocations (
+            financial_year, strategy_category_id, source_month, source_closing_snapshot,
+            destination_month, destination_financial_year, carry_type, amount, status, reason, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?)`,
+          [
+            sourceFinancialYear, catId, mNum, closingBalanceAmount, targetMonthNum, 
+            destinationFY, allocationType, allocAmt, reason || "Month Carry Allocation", performedBy || "System"
+          ]
+        );
+        const newAllocId = insRes.insertId;
+        
+        if (allocAmt > 0 && adjustmentType) {
+          const destQNum = getQuarterFromMonth(targetMonthNum);
+          const sourceQNum = getQuarterFromMonth(mNum);
+          await conn.query(
+            `INSERT INTO strategy_adjustments (
+              financial_year, source_financial_year, destination_financial_year,
+              source_quarter, destination_quarter, source_month, destination_month,
+              strategy_category_id, adjustment_scope, adjustment_type, amount, reason,
+              reference_type, reference_id, created_by, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'MONTH_CARRY_ALLOCATION', ?, ?, 1)`,
+            [
+              sourceFinancialYear, sourceFinancialYear, sourceFinancialYear,
+              sourceQNum, destQNum, mNum, targetMonthNum,
+              catId, "MONTH_REALLOCATION", adjustmentType, allocAmt, reason || "Month Carry Allocation",
+              newAllocId, performedBy || "System"
+            ]
+          );
+        }
+      }
+      
+      const actionType = existingIds.length > 0 ? "MONTH_ALLOCATION_REPLACED" : "MONTH_ALLOCATION_CREATED";
+      await conn.query(
+        `INSERT INTO strategy_goal_audit_logs (
+          entity_type, entity_id, financial_year, month_number, strategy_category_id,
+          action_type, old_value, new_value, metadata_json, reason, performed_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          "MONTH_ALLOCATION",
+          catId,
+          sourceFinancialYear,
+          mNum,
+          catId,
+          actionType,
+          existingIds.length > 0 ? JSON.stringify(oldAllocSummary) : "{}",
+          JSON.stringify(monthAllocations),
+          JSON.stringify({
+            categoryName: catMap[catId].name,
+            allocationType,
+            sourceClosingAmount: closingBalanceAmount,
+            reason: reason || "Month Carry Allocation"
+          }),
+          reason || "Month Carry Allocation",
+          performedBy || "System"
+        ]
+      );
+    }
+    
+    if (typeof conn.commit === "function") await conn.commit();
+    
+    let action = "CREATED";
+    if (replacedCount > 0 && createdCount === 0 && unchangedCount === 0) action = "REPLACED";
+    if (unchangedCount === allocations.length) action = "UNCHANGED";
+    else if (replacedCount > 0 || createdCount > 0) action = replacedCount > 0 ? "REPLACED" : "CREATED";
+    
+    return {
+      success: true,
+      action,
+      created: createdCount,
+      replaced: replacedCount,
+      unchanged: unchangedCount,
+      sourceFinancialYear,
+      sourceMonthNumber: mNum
+    };
+  } catch (txErr) {
+    if (typeof conn.rollback === "function") await conn.rollback();
+    throw txErr;
+  } finally {
+    if (typeof conn.release === "function") conn.release();
+  }
+}
+
+async function removeMonthCarryAllocation(financialYear, monthNumber, categoryId, performedBy, options = {}) {
+  const databasePool = options.connection || options.databasePool || db;
+  const promiseDb = databasePool.promise ? databasePool.promise() : databasePool;
+  
+  const mNum = Number(monthNumber);
+  const catId = Number(categoryId);
+  
+  const conn = await promiseDb.getConnection();
+  try {
+    if (typeof conn.beginTransaction === "function") await conn.beginTransaction();
+    
+    const [existingAlloc] = await conn.query(
+      `SELECT id, destination_month, amount
+       FROM strategy_month_carry_allocations
+       WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND status = 'CONFIRMED'
+       FOR UPDATE`,
+      [financialYear, mNum, catId]
+    );
+    
+    if (existingAlloc.length === 0) {
+      if (typeof conn.rollback === "function") await conn.rollback();
+      return { success: true, action: "UNCHANGED" };
+    }
+    
+    const existingIds = existingAlloc.map(r => r.id);
+    let oldAllocSummary = {};
+    for (const r of existingAlloc) {
+      oldAllocSummary[r.destination_month] = roundMoney(r.amount);
+    }
+    
+    await conn.query(
+      `UPDATE strategy_month_carry_allocations SET status = 'SUPERSEDED'
+       WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND status = 'CONFIRMED'`,
+      [financialYear, mNum, catId]
+    );
+    
+    await conn.query(
+      `UPDATE strategy_adjustments SET is_active = 0
+       WHERE financial_year = ? AND source_month = ? AND strategy_category_id = ? AND reference_type = 'MONTH_CARRY_ALLOCATION' AND is_active = 1`,
+      [financialYear, mNum, catId]
+    );
+    
+    await conn.query(
+      `INSERT INTO strategy_goal_audit_logs (
+        entity_type, entity_id, financial_year, month_number, strategy_category_id,
+        action_type, old_value, new_value, metadata_json, reason, performed_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "MONTH_ALLOCATION",
+        catId,
+        financialYear,
+        mNum,
+        catId,
+        "MONTH_ALLOCATION_REMOVED",
+        JSON.stringify(oldAllocSummary),
+        "{}",
+        JSON.stringify({ reason: "Cleared month carry allocation" }),
+        "Cleared month carry allocation",
+        performedBy || "System"
+      ]
+    );
+    
+    if (typeof conn.commit === "function") await conn.commit();
+    return { success: true, action: "REMOVED" };
+  } catch (err) {
+    if (typeof conn.rollback === "function") await conn.rollback();
+    throw err;
+  } finally {
+    if (typeof conn.release === "function") conn.release();
+  }
+}
+
 module.exports = {
+  getMonthCarryAllocationData,
+  allocateMonthCarryBalance,
+  removeMonthCarryAllocation,
+
   toMoneyNumber,
   roundMoney,
   getFinancialYearFromDate,
@@ -2706,6 +3448,7 @@ module.exports = {
   getAllMonthsMetadata,
   getAuthoritativeWonDate,
   getMappedCategoryBySource,
+  resolveQuotationStrategyCategory,
   getCategoryAchievement,
   getCategoryQuarterAdjustments,
   calculateCategoryQuarterMonths,
@@ -2715,6 +3458,7 @@ module.exports = {
   getNextQuarterContext,
   getQuarterAllocationData,
   allocateQuarterBalance,
+  resetQuarterAllocations,
   isStrategyClosedStatus,
   removeQuotationContribution,
   syncWonQuotationContribution,

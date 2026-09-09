@@ -31,6 +31,11 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     l.mobile_no,
     l.reference,
     COALESCE(ls.name, l.source) AS source,
+    l.strategy_category_id,
+    ssc.name AS strategy_category_name,
+    ssc.code AS strategy_category_code,
+    ssc.badge_background AS strategy_category_badge_bg,
+    ssc.badge_text_color AS strategy_category_badge_text,
     l.assignee,
     l.location,
     l.architecture,
@@ -66,6 +71,8 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       FROM lead l
       LEFT JOIN inquiry_lead_source ls
         ON ls.id = l.source
+      LEFT JOIN strategy_source_categories ssc
+        ON ssc.id = l.strategy_category_id
       LEFT JOIN (
         SELECT lead_id, MAX(created_at) AS last_followup_at
         FROM lead_follow_up
@@ -116,6 +123,11 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
       l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
+      l.strategy_category_id,
+      ssc.name AS strategy_category_name,
+      ssc.code AS strategy_category_code,
+      ssc.badge_background AS strategy_category_badge_bg,
+      ssc.badge_text_color AS strategy_category_badge_text,
       l.priority,
       l.assignee,
       l.status,
@@ -128,6 +140,7 @@ router.get("/sales/leads", authenticateAndAuthorize(), (req, res) => {
     FROM lead l
     LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
     LEFT JOIN inquiry_lead_category lc ON lc.id = l.category
+    LEFT JOIN strategy_source_categories ssc ON ssc.id = l.strategy_category_id
     WHERE 1=1
   `;
 
@@ -173,6 +186,11 @@ router.get(
     l.reference,
 
     COALESCE(ls.name,l.source) AS source,
+    l.strategy_category_id,
+    ssc.name AS strategy_category_name,
+    ssc.code AS strategy_category_code,
+    ssc.badge_background AS strategy_category_badge_bg,
+    ssc.badge_text_color AS strategy_category_badge_text,
 
     l.location,
     l.architecture,
@@ -197,6 +215,9 @@ ON ls.id=l.source
 
 LEFT JOIN inquiry_lead_category lc
 ON lc.id=l.category
+
+LEFT JOIN strategy_source_categories ssc
+ON ssc.id=l.strategy_category_id
 
 WHERE l.lead_id=?
   `;
@@ -234,6 +255,9 @@ router.get(
     l.mobile_no,
     l.reference,
     l.source,
+    l.strategy_category_id,
+    ssc.name AS strategy_category_name,
+    ssc.code AS strategy_category_code,
     l.location,
     l.architecture,
     l.priority,
@@ -244,6 +268,7 @@ router.get(
     l.lost_reason,
     l.created_at
 FROM lead l
+LEFT JOIN strategy_source_categories ssc ON ssc.id = l.strategy_category_id
 WHERE l.lead_id = ?
   `;
 
@@ -273,6 +298,7 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
     mobile_no, // ✅ ADDED
     reference,
     source,
+    strategy_category_id,
     location,
     architecture,
     status,
@@ -317,6 +343,7 @@ customer_name=?,
 mobile_no=?,
 reference=?,
 source=?,
+strategy_category_id=?,
 location=?,
 architecture=?,
 status=?,
@@ -337,6 +364,7 @@ customer_name,
 mobile_no,
 reference,
 source,
+strategy_category_id ? Number(strategy_category_id) : null,
 location,
 architecture,
 status,
@@ -358,6 +386,25 @@ leadId
                 error: err,
               });
           }
+
+          // Resync closed quotations for this lead to reflect updated strategy category
+          try {
+            const scs = require("../services/StrategyCalculationService");
+            db.query(
+              "SELECT id FROM quotation WHERE lead_id = ? AND quotation_status IN ('Approved', 'Won')",
+              [leadId],
+              async (qErr, qRows) => {
+                if (!qErr && qRows && qRows.length > 0) {
+                  for (const q of qRows) {
+                    await scs.syncWonQuotationContribution(q.id).catch(() => {});
+                  }
+                }
+              }
+            );
+          } catch (syncErr) {
+            console.error("Quotation sync error on lead update:", syncErr);
+          }
+
           res.json({ success: true, message: "Lead updated successfully" });
         },
       );
@@ -380,6 +427,7 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     mobile_no,
     reference,
     source,
+    strategy_category_id,
     location,
     architecture,
     status,
@@ -396,6 +444,7 @@ customer_name,
 mobile_no,
 reference,
 source,
+strategy_category_id,
 location,
 architecture,
 status,
@@ -405,7 +454,7 @@ category,
 description,
 created_by
     )
-    VALUES (?, ?, ?, ?, ?,?,?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -414,6 +463,7 @@ created_by
     mobile_no,
     reference,
     source,
+    strategy_category_id ? Number(strategy_category_id) : null,
     location,
     architecture,
     status,
@@ -840,7 +890,11 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
-      l.mobile_no,
+      l.strategy_category_id,
+      ssc.name AS strategy_category_name,
+      ssc.code AS strategy_category_code,
+      ssc.badge_background AS strategy_category_badge_bg,
+      ssc.badge_text_color AS strategy_category_badge_text,
       l.status,
       l.lost_reason,
       l.created_at,
@@ -873,6 +927,8 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     FROM lead l
     LEFT JOIN inquiry_lead_source ls
       ON ls.id = l.source
+    LEFT JOIN strategy_source_categories ssc
+      ON ssc.id = l.strategy_category_id
     LEFT JOIN (
       SELECT lead_id, MAX(created_at) AS last_followup_at
       FROM lead_follow_up
