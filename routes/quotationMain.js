@@ -724,20 +724,15 @@ router.post(
         }
       }
 
-      // Get lead's source and strategy_category_id
+      // Get lead's source, strategy_category_id & mobile_no
       let source = null;
       let leadStrategyCatId = null;
-      if (lead_id) {
-        const [leadRows] = await db.promise().query(
-          `SELECT COALESCE(ls.name, l.source) AS source, l.strategy_category_id 
-      // Get lead's source & mobile_no
-      let source = null;
       let leadMobileNo = mobile_no || null;
       if (lead_id) {
         const [leadRows] = await db.promise().query(
-          `SELECT COALESCE(ls.name, l.source) AS source, l.mobile_no 
-           FROM lead l 
-           LEFT JOIN inquiry_lead_source ls ON ls.id = l.source 
+          `SELECT COALESCE(ls.name, l.source) AS source, l.strategy_category_id, l.mobile_no
+           FROM lead l
+           LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
            WHERE l.lead_id = ?`,
           [lead_id],
         );
@@ -1076,7 +1071,6 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         IF(q_approved.approved_count > 0, 1, 0) AS has_approved,
         l.won_at,
           q.sales_assigned_at,
-          q.estimation_assigned_at,
           q.estimation_assigned_at
       FROM lead l
       LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
