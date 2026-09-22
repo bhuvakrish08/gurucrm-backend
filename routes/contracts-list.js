@@ -27,7 +27,7 @@ const MAX_DOC_SIZE = 15 * 1024 * 1024; // 15MB
 const storage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => ({
-    folder: "crm/contracts",   // ✅ CONTRACT FOLDER
+    folder: `${process.env.CLOUDINARY_FOLDER || "guru_crm"}/contracts`,   // ✅ CONTRACT FOLDER
     resource_type: "auto",
   }),
 });

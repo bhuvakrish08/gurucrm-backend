@@ -33,8 +33,9 @@ const storage = new CloudinaryStorage({
     const nameWithoutExt = file.originalname.substring(0, file.originalname.lastIndexOf("."));
     const cleanName = nameWithoutExt.replace(/[^a-zA-Z0-9]/g, "_");
     const publicId = isRaw ? `${cleanName}-${uniqueSuffix}.${ext}` : `${cleanName}-${uniqueSuffix}`;
+    const rootFolder = process.env.CLOUDINARY_FOLDER || "guru_crm";
     return {
-      folder: "crm/quotation_revision",
+      folder: `${rootFolder}/quotation_revision`,
       resource_type: isRaw ? "raw" : "auto",
       public_id: publicId,
     };

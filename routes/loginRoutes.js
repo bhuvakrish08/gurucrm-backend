@@ -43,7 +43,7 @@ const sendEmail = async (to, otp) => {
           <tr>
             <td align="center" 
               style="font-size:14px;color:#666;padding:15px 0;">
-              You recently requested to reset your password for your Venster CRM account.<br/>
+              You recently requested to reset your password for your Guru CRM account.<br/>
               Use the OTP below to continue:
             </td>
           </tr>
