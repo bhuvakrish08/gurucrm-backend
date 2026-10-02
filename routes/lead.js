@@ -43,6 +43,9 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     l.assignee,
     l.location,
     l.architecture,
+    l.import_export,
+    COALESCE(lc.name, l.category) AS category,
+    l.products,
     l.status,
     l.lost_reason,
     l.created_at,
@@ -74,7 +77,9 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
     END AS follow_up_status
       FROM lead l
       LEFT JOIN inquiry_lead_source ls
-        ON ls.id = l.source
+        ON (ls.id = l.source OR ls.name = l.source)
+      LEFT JOIN inquiry_lead_category lc
+        ON (lc.id = l.category OR lc.name = l.category)
       LEFT JOIN strategy_source_categories ssc
         ON ssc.id = l.strategy_category_id
       LEFT JOIN (
@@ -130,6 +135,11 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
       l.mobile_no,
       l.reference,
       COALESCE(ls.name, l.source) AS source,
+      l.strategy_category_id,
+      ssc.name AS strategy_category_name,
+      ssc.code AS strategy_category_code,
+      ssc.badge_background AS strategy_category_badge_bg,
+      ssc.badge_text_color AS strategy_category_badge_text,
       l.assignee,
       l.location,
       l.architecture,
@@ -171,6 +181,8 @@ router.get("/read", authenticateAndAuthorize(), (req, res) => {
         FROM lead l
         LEFT JOIN inquiry_lead_source ls
           ON ls.id = l.source
+        LEFT JOIN strategy_source_categories ssc
+          ON ssc.id = l.strategy_category_id
         LEFT JOIN (
           SELECT lead_id, MAX(created_at) AS last_followup_at
           FROM lead_follow_up
@@ -293,12 +305,13 @@ router.get(
 
     l.location,
     l.architecture,
+    l.import_export,
 
     l.priority,
     l.assignee,
 
     lc.name AS category,
-
+    l.products,
     l.description,
     l.status,
     l.lost_reason,
@@ -310,10 +323,10 @@ router.get(
 FROM lead l
 
 LEFT JOIN inquiry_lead_source ls
-ON ls.id=l.source
+ON (ls.id=l.source OR ls.name=l.source)
 
 LEFT JOIN inquiry_lead_category lc
-ON lc.id=l.category
+ON (lc.id=l.category OR lc.name=l.category)
 
 LEFT JOIN strategy_source_categories ssc
 ON ssc.id=l.strategy_category_id
@@ -359,9 +372,11 @@ router.get(
     ssc.code AS strategy_category_code,
     l.location,
     l.architecture,
+    l.import_export,
     l.priority,
     l.assignee,
     l.category,
+    l.products,
     l.description,
     l.status,
     l.lost_reason,
@@ -395,17 +410,23 @@ router.put("/update/:id", authenticateAndAuthorize(), (req, res) => {
     company_name,
     customer_name,
     mobile_no, // ✅ ADDED
-    reference,
+    reference = "",
     source,
     strategy_category_id,
     location,
-    architecture,
+    architecture = "",
     status,
-    priority,
-    assignee,
+    priority = "",
+    assignee = "",
     category,
+    products,
     description,
+    import_export = "",
   } = req.body;
+
+  const productsVal = products !== undefined
+    ? (typeof products === "object" ? JSON.stringify(products) : String(products))
+    : null;
 
   const updated_by = req.user.username;
 
@@ -449,7 +470,9 @@ status=?,
 priority=?,
 assignee=?,
 category=?,
+products=?,
 description=?,
+import_export=?,
 updated_by=?,
         updated_at = CURRENT_TIMESTAMP
       WHERE lead_id = ?
@@ -470,7 +493,9 @@ status,
 priority,
 assignee,
 category,
+productsVal,
 description,
+import_export,
 updated_by,
 leadId
 ],
@@ -524,17 +549,24 @@ router.post("/insert", authenticateAndAuthorize(), (req, res) => {
     company_name,
     customer_name,
     mobile_no,
-    reference,
+    reference = "",
     source,
     strategy_category_id,
     location,
-    architecture,
-    status,
-    priority,
-    assignee,
+    architecture = "",
+    status = "Pending",
+    priority = "",
+    assignee = "",
     category,
+    products,
     description,
+    import_export = "",
   } = req.body;
+
+  const productsVal = products
+    ? (typeof products === "object" ? JSON.stringify(products) : String(products))
+    : null;
+
   const sql = `
     INSERT INTO \`lead\`
     (
@@ -550,10 +582,12 @@ status,
 priority,
 assignee,
 category,
+products,
 description,
+import_export,
 created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
@@ -565,11 +599,13 @@ created_by
     strategy_category_id ? Number(strategy_category_id) : null,
     location,
     architecture,
-    status,
+    status || "Pending",
     priority,
     assignee,
     category,
+    productsVal,
     description,
+    import_export,
     userName,
   ];
 
@@ -972,6 +1008,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
     source,
     mobile_no,
     status,
+    import_export,
     from_created,
     to_created,
     from_followup,
@@ -988,6 +1025,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       l.customer_name,
       l.mobile_no,
       l.reference,
+      l.import_export,
       COALESCE(ls.name, l.source) AS source,
       l.strategy_category_id,
       ssc.name AS strategy_category_name,
@@ -995,6 +1033,7 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
       ssc.badge_background AS strategy_category_badge_bg,
       ssc.badge_text_color AS strategy_category_badge_text,
       l.status,
+      l.products,
       l.lost_reason,
       l.created_at,
       l.updated_by,
@@ -1077,6 +1116,10 @@ router.get("/sales/leads/filter", authenticateAndAuthorize(), (req, res) => {
   if (status) {
     sql += " AND l.status = ?";
     values.push(status);
+  }
+  if (req.query.strategy_category_id) {
+    sql += " AND l.strategy_category_id = ?";
+    values.push(req.query.strategy_category_id);
   }
 
   if (from_created && to_created) {

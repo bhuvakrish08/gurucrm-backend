@@ -111,10 +111,12 @@ async function initializeIndexes() {
     { name: "architecture", type: "VARCHAR(255) DEFAULT NULL" },
     { name: "category", type: "VARCHAR(255) DEFAULT NULL" },
     { name: "priority", type: "VARCHAR(100) DEFAULT NULL" },
+    { name: "products", type: "LONGTEXT DEFAULT NULL" },
     { name: "description", type: "TEXT DEFAULT NULL" },
     { name: "lost_reason", type: "TEXT DEFAULT NULL" },
     { name: "won_at", type: "DATETIME DEFAULT NULL" },
     { name: "followup_status", type: "VARCHAR(20) DEFAULT NULL" },
+    { name: "import_export", type: "VARCHAR(50) DEFAULT NULL" },
   ];
 
   for (const col of leadRequiredColumns) {
@@ -134,6 +136,37 @@ async function initializeIndexes() {
     } catch (err) {
       console.warn(`[Column Migration Warning] lead.${col.name}:`, err.message);
     }
+  }
+
+  // Ensure items column exists in proforma_invoices table
+  try {
+    const [cols] = await db
+      .promise()
+      .query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'proforma_invoices' AND COLUMN_NAME = 'items'"
+      );
+    if (cols.length === 0) {
+      await db
+        .promise()
+        .query("ALTER TABLE `proforma_invoices` ADD COLUMN `items` LONGTEXT DEFAULT NULL");
+      console.log("⚡ Added column items to proforma_invoices table");
+    }
+  } catch (err) {
+    console.warn("[Column Migration Warning] proforma_invoices.items:", err.message);
+  }
+
+  // Ensure default activities exist in inquiry_lead_activity
+  try {
+    const [actRows] = await db.promise().query("SELECT COUNT(*) AS total FROM inquiry_lead_activity");
+    if (actRows[0].total === 0) {
+      const defaults = ["Call", "Meeting", "Email", "Site Visit", "WhatsApp"];
+      for (const name of defaults) {
+        await db.promise().query("INSERT IGNORE INTO inquiry_lead_activity (name, status) VALUES (?, 1)", [name]);
+      }
+      console.log("⚡ Seeded default inquiry lead activities (Call, Meeting, Email, Site Visit, WhatsApp)");
+    }
+  } catch (err) {
+    console.warn("[Activity Seed Warning]:", err.message);
   }
 }
 

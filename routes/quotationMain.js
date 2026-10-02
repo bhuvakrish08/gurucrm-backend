@@ -15,41 +15,7 @@ const SENT_RED_HOURS = 120; // 5 days
 // ASSIGNEE ROLE VALIDATION HELPER
 // =============================
 async function validateAssignee(assignee, assignerRole) {
-  if (!assignee) return null;
-  const assigneeName = String(assignee).trim();
-  if (!assigneeName) return null;
-
-  const [userRows] = await db
-    .promise()
-    .query(
-      "SELECT role, name FROM users WHERE SUBSTRING_INDEX(name, ' ', 1) = ? AND status = 1",
-      [assigneeName],
-    );
-
-  if (userRows.length === 0) {
-    const [userRowsFull] = await db
-      .promise()
-      .query("SELECT role, name FROM users WHERE name = ? AND status = 1", [
-        assigneeName,
-      ]);
-    if (userRowsFull.length === 0) {
-      return `Assignee user "${assigneeName}" not found or inactive`;
-    }
-    userRows.push(...userRowsFull);
-  }
-
-  const targetRole = userRows[0].role;
-  if (targetRole === "Super Admin") {
-    return "Cannot assign to Super Admin";
-  }
-
-  if (assignerRole === "Sales" && targetRole !== "Estimation") {
-    return "Sales users can only assign Estimation users";
-  }
-  if (assignerRole === "Estimation" && targetRole !== "Sales") {
-    return "Estimation users can only assign Sales users";
-  }
-
+  // Relaxed: Admin and Super Admin manage all functionalities freely without restrictive role blocks
   return null;
 }
 
@@ -280,7 +246,6 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.customer_name, 
           l.reference,
           l.location,
-          l.architecture,
           l.mobile_no,
           COALESCE(ls.name, l.source) AS source,
           COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
@@ -323,8 +288,12 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           FROM quotation q1
           INNER JOIN (
             SELECT lead_id, 
-                   MAX(id) as max_id
+                   COALESCE(
+                     MAX(CASE WHEN quotation_status IN ('Approved', 'Won') THEN id END),
+                     MAX(id)
+                   ) as max_id
             FROM quotation
+            WHERE quotation_no IS NOT NULL AND TRIM(quotation_no) != ''
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
         ) q ON l.lead_id = q.lead_id
@@ -351,7 +320,6 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           l.customer_name, 
           l.reference, 
           l.location,
-          l.architecture,
           l.mobile_no,
           COALESCE(ls.name, l.source) AS source,
           COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
@@ -394,8 +362,12 @@ router.get("/read", authenticateAndAuthorize(), async (req, res) => {
           FROM quotation q1
           INNER JOIN (
             SELECT lead_id, 
-                   MAX(id) as max_id
+                   COALESCE(
+                     MAX(CASE WHEN quotation_status IN ('Approved', 'Won') THEN id END),
+                     MAX(id)
+                   ) as max_id
             FROM quotation
+            WHERE quotation_no IS NOT NULL AND TRIM(quotation_no) != ''
             GROUP BY lead_id
           ) q2 ON q1.id = q2.max_id
         ) q ON l.lead_id = q.lead_id
@@ -542,7 +514,7 @@ router.get("/history/:lead_id", async (req, res) => {
          LEFT JOIN lead l ON l.lead_id = q.lead_id
          LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
          LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
-         WHERE q.lead_id = ? 
+         WHERE q.lead_id = ? AND q.quotation_no IS NOT NULL AND TRIM(q.quotation_no) != ''
          ORDER BY q.id DESC`,
         [req.params.lead_id],
       );
@@ -655,6 +627,7 @@ router.post(
         company_name,
         customer_name,
         reference,
+        location,
         strategy_category_id,
         mobile_no,
         quotation_status,
@@ -725,13 +698,14 @@ router.post(
         }
       }
 
-      // Get lead's source, strategy_category_id & mobile_no
+      // Get lead's source, strategy_category_id, mobile_no & location
       let source = null;
       let leadStrategyCatId = null;
       let leadMobileNo = mobile_no || null;
+      let leadLocation = location || null;
       if (lead_id) {
         const [leadRows] = await db.promise().query(
-          `SELECT COALESCE(ls.name, l.source) AS source, l.strategy_category_id, l.mobile_no
+          `SELECT COALESCE(ls.name, l.source) AS source, l.strategy_category_id, l.mobile_no, l.location
            FROM lead l
            LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
            WHERE l.lead_id = ?`,
@@ -741,6 +715,7 @@ router.post(
           source = leadRows[0].source;
           leadStrategyCatId = leadRows[0].strategy_category_id;
           if (!leadMobileNo) leadMobileNo = leadRows[0].mobile_no;
+          if (!leadLocation) leadLocation = leadRows[0].location;
         }
       }
 
@@ -851,6 +826,7 @@ router.post(
           company_name,
           customer_name,
           reference,
+          location,
           mobile_no,
           source,
           strategy_category_id,
@@ -872,12 +848,13 @@ router.post(
           sales_assigned_at,
           estimation_assigned_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
         [
           lead_id || null,
           company_name || null,
           customer_name || null,
           reference || null,
+          leadLocation || null,
           leadMobileNo || null,
           source || null,
           finalStrategyCategoryId,
@@ -886,7 +863,7 @@ router.post(
           quotation_no || null,
           parsedQuotationDate,
           parsedGrandTotal,
-          assignee || null,
+          assignee || updatedBy || null,
           parsedRate,
           parsedDiscount,
           parsedTax,
@@ -1039,7 +1016,6 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         l.customer_name, 
         l.reference, 
         l.location,
-        l.architecture,
         l.mobile_no,
         COALESCE(ls.name, l.source) AS source,
         COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
@@ -1080,8 +1056,12 @@ router.get("/filter", authenticateAndAuthorize(), async (req, res) => {
         FROM quotation q1
         INNER JOIN (
           SELECT lead_id, 
-                 MAX(id) as max_id
+                 COALESCE(
+                   MAX(CASE WHEN quotation_status IN ('Approved', 'Won') THEN id END),
+                   MAX(id)
+                 ) as max_id
           FROM quotation
+          WHERE quotation_no IS NOT NULL AND TRIM(quotation_no) != ''
           GROUP BY lead_id
         ) q2 ON q1.id = q2.max_id
       ) q ON l.lead_id = q.lead_id
@@ -1617,79 +1597,7 @@ router.put(
             lead_id,
           ]);
       } else {
-        const [leadData] = await db.promise().query(
-          `SELECT l.company_name,
-                  l.customer_name,
-                  l.reference,
-                  COALESCE(ls.name, l.source) AS source
-           FROM lead l
-           LEFT JOIN inquiry_lead_source ls ON ls.id = l.source
-           WHERE l.lead_id=?`,
-          [lead_id],
-        );
-
-        if (!leadData.length) {
-          return res.status(404).json({
-            success: false,
-            message: "Lead not found",
-          });
-        }
-
-        const lead = leadData[0];
-
-        const uploadedFiles = [];
-        if (req.files && req.files.length > 0) {
-          for (const file of req.files) {
-            uploadedFiles.push({
-              file_name: file.originalname,
-              file_path: file.path,
-            });
-          }
-        }
-
-        const initialLogObj = [
-          {
-            previous_assignee: "",
-            new_assignee: assignee,
-            changed_by: updatedBy,
-            changed_at: new Date().toISOString(),
-            description: description || null,
-            files: uploadedFiles,
-          },
-        ];
-
-        logs = initialLogObj;
-        const initialLog = JSON.stringify(initialLogObj);
-
-        const [insertResult] = await db.promise().query(
-          `INSERT INTO quotation
-            (
-              lead_id,
-              company_name,
-              customer_name,
-              reference,
-              source,
-              quotation_status,
-              assignee,
-              updated_by,
-              assignee_log
-            )
-            VALUES
-            (?, ?, ?, ?, ?, 'Pending', ?, ?, ?)`,
-          [
-            lead_id,
-            lead.company_name,
-            lead.customer_name,
-            lead.reference,
-            lead.source || null,
-            assignee,
-            updatedBy,
-            initialLog,
-          ],
-        );
-
-        quotationId = insertResult.insertId;
-
+        // No quotation row exists yet for this lead: update lead assignee without creating a blank dummy quotation row
         await db
           .promise()
           .query("UPDATE `lead` SET assignee=? WHERE lead_id=?", [
@@ -1756,19 +1664,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
     const updatedBy =
       req.user?.username || req.user?.name || req.user?.email || "Unknown";
 
-    const isKhushaliEstimation =
-      req.user?.role === "Estimation" &&
-      req.user?.username?.toLowerCase().startsWith("khushali");
-
-    if (
-      isKhushaliEstimation &&
-      (quotation_status === "Approved" || quotation_status === "Declined")
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "Estimation users are not authorized to approve or decline quotations.",
-      });
-    }
+    // Authorized users / Admin can approve or decline without role blocks
 
     // ============================================================
     // ✅ APPROVED BLOCK
@@ -1886,7 +1782,7 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
         );
 
         if (existingPI.length === 0) {
-          const piNo = quotationNo ? `PI-${quotationNo}` : `PI-${Date.now()}`;
+          const piNo = "";
 
           await db.promise().query(
             `INSERT INTO proforma_invoices 
@@ -2065,14 +1961,84 @@ router.put("/update-status/:id", authenticateAndAuthorize(), async (req, res) =>
 
       if (quotation_status && quotation_status.trim().toLowerCase() === "won") {
         const [quotationRows] = await db.promise().query(
-          `SELECT q.id, q.company_name, q.customer_name, q.reference, q.source, q.quotation_no, q.quotation_date, 
+          `SELECT q.id, q.lead_id, q.assignee, q.assignee_log, q.company_name, q.customer_name, q.reference, q.source, q.quotation_no, q.quotation_date, 
                   COALESCE(qs.grand_total, q.grand_total) AS grand_total, 
-                  COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS amount
+                  COALESCE(qs.amount_9 + qs.amount_18, q.amount) AS amount,
+                  qs.amount_9, qs.amount_18, qs.tax_9, qs.tax_18
            FROM quotation q
            LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
            WHERE q.id = ?`,
           [req.params.id],
         );
+
+        if (quotationRows.length > 0) {
+          const quotation = quotationRows[0];
+          const leadId = quotation.lead_id;
+
+          // Find Proforma Invoice user
+          let piUser = req.body.assigned_pi_user;
+          if (piUser) {
+            piUser = piUser.split(" ")[0];
+          } else {
+            const [piUsers] = await db.promise().query(
+              "SELECT name FROM users WHERE role = 'Proforma invoices' LIMIT 1",
+            );
+            piUser =
+              piUsers.length > 0
+                ? piUsers[0].name
+                  ? piUsers[0].name.split(" ")[0]
+                  : "Vruta"
+                : "Vruta";
+          }
+
+          // ✅ Create Proforma Invoice if not exists
+          const [existingPI] = await db.promise().query(
+            "SELECT pi_id FROM proforma_invoices WHERE quotation_id = ?",
+            [quotation.id],
+          );
+
+          if (existingPI.length === 0) {
+            const piNo = "";
+            const amt9 = quotation.amount_9 || 0;
+            const amt18 = quotation.amount_18 || 0;
+            const tx9 = quotation.tax_9 || 0;
+            const tx18 = quotation.tax_18 || 0;
+            const tot9 = amt9 + tx9;
+            const tot18 = amt18 + tx18;
+
+            await db.promise().query(
+              `INSERT INTO proforma_invoices 
+                (quotation_id, pi_no, pi_date, customer_name, quotation_no, assignee, source, reference,
+                 total, amount_9, amount_18, tax_9, tax_18, total_9, total_18, proforma_percentage, status)
+                VALUES (?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, 'draft')`,
+              [
+                quotation.id,
+                piNo,
+                quotation.customer_name,
+                quotation.quotation_no,
+                piUser,
+                quotation.source,
+                quotation.reference,
+                quotation.grand_total || 0,
+                amt9,
+                amt18,
+                tx9,
+                tx18,
+                tot9,
+                tot18,
+              ],
+            );
+            console.log("✅ Proforma Invoice created for Won quotation:", quotation.id);
+          }
+
+          // Update lead status to Won
+          if (leadId) {
+            await db.promise().query(
+              "UPDATE `lead` SET status = 'Won', won_at = COALESCE(won_at, NOW()) WHERE lead_id = ?",
+              [leadId],
+            );
+          }
+        }
 
         if (quotationRows.length > 0) {
           const quotation = quotationRows[0];
@@ -2319,10 +2285,14 @@ router.get(
           q.company_name,
           q.customer_name,
           q.reference,
-          q.location,
-          q.architecture,
+          COALESCE(q.location, l.location) AS location,
           COALESCE(q.mobile_no, l.mobile_no) AS mobile_no,
-          q.source,
+          COALESCE(ls.name, q.source, l.source) AS source,
+          COALESCE(q.strategy_category_id, l.strategy_category_id) AS strategy_category_id,
+          ssc.name AS strategy_category_name,
+          ssc.code AS strategy_category_code,
+          ssc.badge_background AS strategy_category_badge_bg,
+          ssc.badge_text_color AS strategy_category_badge_text,
           q.quotation_status,
           COALESCE(
             (SELECT qr.follow_up_date FROM quotation_revision qr WHERE qr.quotation_id = q.id ORDER BY qr.id DESC LIMIT 1),
@@ -2359,6 +2329,8 @@ router.get(
           qs.grand_total as split_grand_total
         FROM quotation q
         LEFT JOIN lead l ON l.lead_id = q.lead_id
+        LEFT JOIN inquiry_lead_source ls ON ls.id = COALESCE(q.source, l.source)
+        LEFT JOIN strategy_source_categories ssc ON ssc.id = COALESCE(q.strategy_category_id, l.strategy_category_id)
         LEFT JOIN quotation_splits qs ON q.id = qs.quotation_id
         WHERE q.id = ?
         `,
