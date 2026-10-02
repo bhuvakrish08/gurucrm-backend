@@ -6,7 +6,7 @@ const router = express.Router();
 
 // Read all data
 router.get("/read", (req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=1800, stale-while-revalidate=86400");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   const { search2 = "", status } = req.query;
 
   let query = "SELECT * FROM inquiry_lead_category WHERE 1=1";
@@ -30,11 +30,22 @@ router.get("/read", (req, res) => {
 // Insert data
 router.post("/insert", (req, res) => {
   const { name } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ status: 0, message: "Category name is required" });
+  }
 
-  const query = "INSERT INTO inquiry_lead_category (name) VALUES (?)";
-  db.query(query, [name], (err, result) => {
-    if (err) return res.status(500).json(err);
-    res.json({ status: 1, message: "Inserted successfully", result });
+  const checkQuery = "SELECT id, name FROM inquiry_lead_category WHERE TRIM(LOWER(name)) = TRIM(LOWER(?)) LIMIT 1";
+  db.query(checkQuery, [name.trim()], (checkErr, checkRows) => {
+    if (checkErr) return res.status(500).json(checkErr);
+    if (checkRows && checkRows.length > 0) {
+      return res.status(400).json({ status: 0, message: "A category with this name already exists" });
+    }
+
+    const query = "INSERT INTO inquiry_lead_category (name) VALUES (?)";
+    db.query(query, [name.trim()], (err, result) => {
+      if (err) return res.status(500).json(err);
+      res.json({ status: 1, message: "Inserted successfully", result });
+    });
   });
 });
 

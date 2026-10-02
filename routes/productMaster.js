@@ -121,21 +121,25 @@ router.post("/insert", (req, res) => {
         product_category,
         unit,
         product_code,
-        product_type,
-        purchase_price,
-        sales_price,
-        product_code_type,
-        code,
-        current_stocks,
-        description,
+        product_type = "Both",
+        purchase_price = 0,
+        sales_price = 0,
+        product_code_type = "",
+        code = "",
+        current_stocks = 0,
+        description = "",
     } = req.body;
+
+    const safe_purchase_price = purchase_price ? Number(purchase_price) || 0 : 0;
+    const safe_sales_price = sales_price ? Number(sales_price) || 0 : 0;
+    const safe_current_stocks = current_stocks ? Number(current_stocks) || 0 : 0;
 
     const query = `
     INSERT INTO product_master (product_name, product_category, unit, product_code, product_type, purchase_price, sales_price, product_code_type, code, current_stocks, description)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-    db.query(query, [product_name, product_category, unit, product_code, product_type, purchase_price, sales_price, product_code_type, code, current_stocks, description], (err, result) => {
+    db.query(query, [product_name, product_category, unit, product_code, product_type, safe_purchase_price, safe_sales_price, product_code_type, code, safe_current_stocks, description], (err, result) => {
         if (err) return res.status(500).json(err);
         res.json({ status: 1, message: "Inserted successfully", result });
     });
@@ -149,14 +153,18 @@ router.put("/update/:id", (req, res) => {
         product_category,
         unit,
         product_code,
-        product_type,
-        purchase_price,
-        sales_price,
-        product_code_type,
-        code,
-        current_stocks,
-        description,
+        product_type = "Both",
+        purchase_price = 0,
+        sales_price = 0,
+        product_code_type = "",
+        code = "",
+        current_stocks = 0,
+        description = "",
     } = req.body;
+
+    const safe_purchase_price = purchase_price ? Number(purchase_price) || 0 : 0;
+    const safe_sales_price = sales_price ? Number(sales_price) || 0 : 0;
+    const safe_current_stocks = current_stocks ? Number(current_stocks) || 0 : 0;
 
     const query = `
     UPDATE product_master
@@ -164,7 +172,7 @@ router.put("/update/:id", (req, res) => {
     WHERE id = ?
   `;
 
-    db.query(query, [product_name, product_category, unit, product_code, product_type, purchase_price, sales_price, product_code_type, code, current_stocks, description, id], (err, result) => {
+    db.query(query, [product_name, product_category, unit, product_code, product_type, safe_purchase_price, safe_sales_price, product_code_type, code, safe_current_stocks, description, id], (err, result) => {
         if (err) return res.status(500).json(err);
         if (result.affectedRows === 0)
             return res.status(404).json({ message: "Record not found" });

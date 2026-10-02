@@ -50,7 +50,7 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
     }
 
     const amount = (Number(q.grand_total) * newPercentage) / 100;
-    const pi_no = `PI-${Date.now()}`;
+    const pi_no = req.body.pi_no ? String(req.body.pi_no).trim() : "";
 
     const [piResult] = await db.promise().query(
       `INSERT INTO proforma_invoices
@@ -302,6 +302,7 @@ router.get("/list", async (req, res) => {
         pi.source,
         pi.reference,
         pi.total,
+        pi.items,
         pi.amount_9,
         pi.amount_18,
         pi.tax_9,
@@ -312,8 +313,9 @@ router.get("/list", async (req, res) => {
         pi.status,
         pi.stage,
         pi.created_at,
-        q.company_name,
+        COALESCE(q.company_name, l.company_name, '') AS company_name,
         q.lead_id,
+        l.products AS lead_products,
         q.grand_total AS quotation_grand_total,
         COALESCE(qs.amount_9,  0) AS split_amount_9,
         COALESCE(qs.amount_18, 0) AS split_amount_18,
@@ -321,6 +323,7 @@ router.get("/list", async (req, res) => {
         COALESCE(qs.tax_18, 0) AS split_tax_18
       FROM proforma_invoices pi
       LEFT JOIN quotation q ON q.id = pi.quotation_id
+      LEFT JOIN lead l ON l.lead_id = q.lead_id
       LEFT JOIN quotation_splits qs ON qs.quotation_id = pi.quotation_id
       ORDER BY pi.pi_id DESC
     `);
@@ -348,6 +351,8 @@ router.get("/filter", async (req, res) => {
   try {
     const {
       customer_name,
+      company_name,
+      pi_no,
       assignee,
       status,
       quotation_no,
@@ -371,6 +376,7 @@ router.get("/filter", async (req, res) => {
         pi.source,
         pi.reference,
         pi.total,
+        pi.items,
         pi.amount_9,
         pi.amount_18,
         pi.tax_9,
@@ -381,8 +387,9 @@ router.get("/filter", async (req, res) => {
         pi.status,
         pi.stage,
         pi.created_at,
-        q.company_name,
+        COALESCE(q.company_name, l.company_name, '') AS company_name,
         q.lead_id,
+        l.products AS lead_products,
         q.grand_total AS quotation_grand_total,
         COALESCE(qs.amount_9,  0) AS split_amount_9,
         COALESCE(qs.amount_18, 0) AS split_amount_18,
@@ -390,13 +397,25 @@ router.get("/filter", async (req, res) => {
         COALESCE(qs.tax_18, 0) AS split_tax_18
       FROM proforma_invoices pi
       LEFT JOIN quotation q ON q.id = pi.quotation_id
+      LEFT JOIN lead l ON l.lead_id = q.lead_id
       LEFT JOIN quotation_splits qs ON qs.quotation_id = pi.quotation_id
       WHERE 1=1
     `;
 
     const values = [];
 
-    if (customer_name) { sql += " AND pi.customer_name LIKE ?"; values.push(`%${customer_name}%`); }
+    if (customer_name) {
+      sql += " AND (pi.customer_name LIKE ? OR q.company_name LIKE ? OR l.company_name LIKE ?)";
+      values.push(`%${customer_name}%`, `%${customer_name}%`, `%${customer_name}%`);
+    }
+    if (company_name) {
+      sql += " AND (q.company_name LIKE ? OR l.company_name LIKE ?)";
+      values.push(`%${company_name}%`, `%${company_name}%`);
+    }
+    if (pi_no) {
+      sql += " AND pi.pi_no LIKE ?";
+      values.push(`%${pi_no}%`);
+    }
     if (assignee)      { sql += " AND FIND_IN_SET(?, pi.assignee)"; values.push(assignee); }
     if (status)        { sql += " AND pi.status = ?"; values.push(status); }
     if (quotation_no)  { sql += " AND pi.quotation_no LIKE ?"; values.push(`%${quotation_no}%`); }
@@ -450,6 +469,85 @@ router.get("/filter", async (req, res) => {
 });
 
 // ============================================================
+// UPDATE PI NUMBER MANUALLY
+// ============================================================
+router.put("/update-pi-no/:pi_id", async (req, res) => {
+  try {
+    const { pi_id } = req.params;
+    const { pi_no } = req.body;
+
+    const trimmedPiNo = pi_no !== undefined && pi_no !== null ? String(pi_no).trim() : "";
+
+    await db.promise().query(
+      `UPDATE proforma_invoices SET pi_no = ? WHERE pi_id = ?`,
+      [trimmedPiNo, pi_id]
+    );
+
+    res.json({
+      success: true,
+      message: "PI number updated successfully",
+      pi_no: trimmedPiNo,
+    });
+  } catch (err) {
+    console.error("update-pi-no error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// UPDATE PI ITEMS (PRODUCTS WITH QTY, RATE, GST, TOTAL)
+// ============================================================
+router.put("/update-items/:pi_id", async (req, res) => {
+  try {
+    const { pi_id } = req.params;
+    const { items } = req.body;
+
+    const itemsArray = Array.isArray(items) ? items : [];
+    const itemsJson = JSON.stringify(itemsArray);
+
+    let totalTaxable = 0;
+    let totalGst = 0;
+    let grandTotal = 0;
+
+    itemsArray.forEach((item) => {
+      const qty = Number(item.qty || 0);
+      const rate = Number(item.rate || 0);
+      const amount = item.amount !== undefined ? Number(item.amount) : qty * rate;
+      const gst = Number(item.gst !== undefined ? item.gst : (item.gst_percent !== undefined ? item.gst_percent : 18));
+      const gstAmount = item.gst_amount !== undefined ? Number(item.gst_amount) : (amount * gst) / 100;
+      const itemTotal = item.total_amount !== undefined ? Number(item.total_amount) : amount + gstAmount;
+
+      totalTaxable += amount;
+      totalGst += gstAmount;
+      grandTotal += itemTotal;
+    });
+
+    // Update proforma_invoices items and total
+    await db.promise().query(
+      `UPDATE proforma_invoices 
+       SET items = ?, 
+           total = ?, 
+           amount_18 = ?, 
+           tax_18 = ?, 
+           total_18 = ?
+       WHERE pi_id = ?`,
+      [itemsJson, grandTotal, totalTaxable, totalGst, grandTotal, pi_id],
+    );
+
+    res.json({
+      success: true,
+      message: "PI items updated successfully",
+      items: itemsArray,
+      total: grandTotal,
+      taxable: totalTaxable,
+      tax: totalGst,
+    });
+  } catch (err) {
+    console.error("update-items error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ============================================================
 // UPDATE LATEST FOLLOW-UP ONLY (AMOUNT-WISE)
 // ============================================================
