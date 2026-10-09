@@ -59,6 +59,7 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
         pi_date,
         quotation_id,
         customer_name,
+        customer_address,
         quotation_no,
         assignee,
         source,
@@ -67,11 +68,12 @@ router.post("/create-from-quotation/:quotation_id", async (req, res) => {
         proforma_percentage,
         status
       )
-      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         pi_no,
         q.id,
         q.customer_name,
+        q.location || "",
         q.quotation_no,
         q.assignee,
         q.source,
@@ -286,6 +288,112 @@ router.post("/add-followup/:pi_id", async (req, res) => {
 });
 
 // ============================================================
+// HELPER: ENRICH PI ITEMS & LEAD PRODUCTS WITH PRODUCT MASTER
+// ============================================================
+const enrichPIListWithProducts = async (piData) => {
+  try {
+    const [pmRows] = await db.promise().query(
+      "SELECT id, product_name, product_code, code FROM product_master"
+    );
+    const byId = new Map();
+    const byProductCode = new Map();
+    const byName = new Map();
+
+    pmRows.forEach((p) => {
+      if (p.id) byId.set(String(p.id), p);
+      if (p.product_code) byProductCode.set(String(p.product_code).trim().toLowerCase(), p);
+      if (p.product_name) {
+        const key = String(p.product_name).trim().toLowerCase();
+        if (!byName.has(key)) byName.set(key, p);
+      }
+    });
+
+    return piData.map((pi) => {
+      let updatedItems = pi.items;
+      let updatedLeadProducts = pi.lead_products;
+
+      // 1. Enrich pi.items
+      if (pi.items) {
+        try {
+          const itemsArr = typeof pi.items === "string" ? JSON.parse(pi.items) : pi.items;
+          if (Array.isArray(itemsArr) && itemsArr.length > 0) {
+            const enriched = itemsArr.map((it) => {
+              let match = null;
+              if (it.id && byId.has(String(it.id))) match = byId.get(String(it.id));
+              if (!match && it.product_code) match = byProductCode.get(String(it.product_code).trim().toLowerCase());
+              if (!match && it.hsn_code && byProductCode.has(String(it.hsn_code).trim().toLowerCase())) {
+                match = byProductCode.get(String(it.hsn_code).trim().toLowerCase());
+              }
+              if (!match && it.product_name) match = byName.get(String(it.product_name).trim().toLowerCase());
+
+              let pCode = it.product_code || "";
+              let hCode = it.hsn_code || it.code || "";
+
+              // If hCode was mistakenly saved as product_code (model string)
+              if (hCode && match && String(hCode).trim().toLowerCase() === String(match.product_code).trim().toLowerCase()) {
+                if (!pCode) pCode = match.product_code;
+                hCode = match.code || "";
+              }
+
+              if (match) {
+                if (!pCode) pCode = match.product_code || "";
+                if (!hCode || hCode === pCode) hCode = match.code || "";
+              }
+
+              return {
+                ...it,
+                product_code: pCode,
+                hsn_code: hCode,
+              };
+            });
+            updatedItems = typeof pi.items === "string" ? JSON.stringify(enriched) : enriched;
+          }
+        } catch (e) {
+          console.error("enrich items err:", e);
+        }
+      }
+
+      // 2. Enrich lead_products
+      if (pi.lead_products) {
+        try {
+          const lpArr = typeof pi.lead_products === "string" ? JSON.parse(pi.lead_products) : pi.lead_products;
+          if (Array.isArray(lpArr) && lpArr.length > 0) {
+            const enrichedLp = lpArr.map((p) => {
+              let match = null;
+              if (p.id && byId.has(String(p.id))) match = byId.get(String(p.id));
+              if (!match && p.product_code) match = byProductCode.get(String(p.product_code).trim().toLowerCase());
+              if (!match && p.product_name) match = byName.get(String(p.product_name).trim().toLowerCase());
+
+              let pCode = p.product_code || (match ? match.product_code : "");
+              let hCode = p.hsn_code || p.code || (match ? match.code : "");
+
+              return {
+                ...p,
+                product_code: pCode,
+                hsn_code: hCode,
+                code: hCode,
+              };
+            });
+            updatedLeadProducts = typeof pi.lead_products === "string" ? JSON.stringify(enrichedLp) : enrichedLp;
+          }
+        } catch (e) {
+          console.error("enrich lead_products err:", e);
+        }
+      }
+
+      return {
+        ...pi,
+        items: updatedItems,
+        lead_products: updatedLeadProducts,
+      };
+    });
+  } catch (err) {
+    console.error("enrichPIListWithProducts error:", err);
+    return piData;
+  }
+};
+
+// ============================================================
 // GET ALL PI WITH FOLLOW-UPS
 // ============================================================
 router.get("/list", async (req, res) => {
@@ -314,6 +422,8 @@ router.get("/list", async (req, res) => {
         pi.stage,
         pi.created_at,
         COALESCE(q.company_name, l.company_name, '') AS company_name,
+        COALESCE(NULLIF(pi.customer_address, ''), q.location, l.location, '') AS customer_address,
+        COALESCE(q.location, l.location, '') AS location,
         q.lead_id,
         l.products AS lead_products,
         q.grand_total AS quotation_grand_total,
@@ -332,10 +442,12 @@ router.get("/list", async (req, res) => {
       `SELECT * FROM pi_follow_up ORDER BY id DESC`,
     );
 
-    const result = piData.map((pi) => ({
+    const merged = piData.map((pi) => ({
       ...pi,
       follow_ups: followUps.filter((f) => f.pi_id === pi.pi_id),
     }));
+
+    const result = await enrichPIListWithProducts(merged);
 
     res.json({ success: true, count: result.length, data: result });
   } catch (err) {
@@ -388,6 +500,8 @@ router.get("/filter", async (req, res) => {
         pi.stage,
         pi.created_at,
         COALESCE(q.company_name, l.company_name, '') AS company_name,
+        COALESCE(NULLIF(pi.customer_address, ''), q.location, l.location, '') AS customer_address,
+        COALESCE(q.location, l.location, '') AS location,
         q.lead_id,
         l.products AS lead_products,
         q.grand_total AS quotation_grand_total,
@@ -456,10 +570,12 @@ router.get("/filter", async (req, res) => {
       followUps = fuRows;
     }
 
-    const result = piData.map((pi) => ({
+    const merged = piData.map((pi) => ({
       ...pi,
       follow_ups: followUps.filter((f) => f.pi_id === pi.pi_id),
     }));
+
+    const result = await enrichPIListWithProducts(merged);
 
     res.json({ success: true, count: result.length, data: result });
   } catch (err) {
@@ -502,14 +618,7 @@ router.put("/update-items/:pi_id", async (req, res) => {
     const { pi_id } = req.params;
     const { items } = req.body;
 
-    const itemsArray = Array.isArray(items) ? items : [];
-    const itemsJson = JSON.stringify(itemsArray);
-
-    let totalTaxable = 0;
-    let totalGst = 0;
-    let grandTotal = 0;
-
-    itemsArray.forEach((item) => {
+    const itemsArray = (Array.isArray(items) ? items : []).map((item) => {
       const qty = Number(item.qty || 0);
       const rate = Number(item.rate || 0);
       const amount = item.amount !== undefined ? Number(item.amount) : qty * rate;
@@ -517,9 +626,29 @@ router.put("/update-items/:pi_id", async (req, res) => {
       const gstAmount = item.gst_amount !== undefined ? Number(item.gst_amount) : (amount * gst) / 100;
       const itemTotal = item.total_amount !== undefined ? Number(item.total_amount) : amount + gstAmount;
 
-      totalTaxable += amount;
-      totalGst += gstAmount;
-      grandTotal += itemTotal;
+      return {
+        id: item.id,
+        product_name: item.product_name || "",
+        product_code: item.product_code || "",
+        hsn_code: item.hsn_code || "",
+        qty,
+        rate,
+        amount,
+        gst,
+        gst_amount: gstAmount,
+        total_amount: itemTotal,
+      };
+    });
+    const itemsJson = JSON.stringify(itemsArray);
+
+    let totalTaxable = 0;
+    let totalGst = 0;
+    let grandTotal = 0;
+
+    itemsArray.forEach((item) => {
+      totalTaxable += item.amount;
+      totalGst += item.gst_amount;
+      grandTotal += item.total_amount;
     });
 
     // Update proforma_invoices items and total
