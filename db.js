@@ -33,6 +33,12 @@ db.getConnection((err, connection) => {
 
   console.log("✅ Connected to MySQL database");
   connection.release();
+
+  // Ensure proforma_invoices table has customer_address column
+  db.query(
+    "ALTER TABLE proforma_invoices ADD COLUMN customer_address TEXT NULL AFTER customer_name",
+    () => {}
+  );
 });
 
 // Database health check every 5 minutes
